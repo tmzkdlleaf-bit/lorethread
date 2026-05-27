@@ -64,7 +64,7 @@ input, textarea { font-family: var(--sans); color: var(--text); }
 .main-wrap {
   display: flex;
   min-height: 100vh;
-  max-width: 1200px;
+  max-width: 1280px;
   margin: 0 auto;
   position: relative;
   z-index: 1;
@@ -119,24 +119,22 @@ input, textarea { font-family: var(--sans); color: var(--text); }
 
 /* Main layout - 3 column */
 .main-layout {
-  padding-top: 48px;
   display: flex;
-  max-width: 1140px;
+  max-width: 1280px;
   margin: 0 auto;
   position: relative;
   z-index: 1;
   min-height: 100vh;
+  width: 100%;
 }
 .feed-col {
   flex: 1;
   min-width: 0;
-  max-width: 620px;
-  border-left: 1px solid var(--border);
-  border-right: 1px solid var(--border);
+  max-width: 640px;
   min-height: 100vh;
   background: var(--bg2);
 }
-.side-col { width:240px;flex-shrink:0;padding:14px 12px;position:sticky;top:0;height:100vh;overflow-y:auto; }
+.side-col { width: 260px; flex-shrink: 0; padding: 16px 14px; position: sticky; top: 0; height: 100vh; overflow-y: auto; border-left: 1px solid var(--border); }
 
 /* World banner */
 .world-banner { position: relative; overflow: hidden; flex-shrink: 0; }
@@ -404,20 +402,11 @@ input, textarea { font-family: var(--sans); color: var(--text); }
 @media (max-width: 700px) { .side-col { display: none; } .main-layout { max-width: 100%; } }
 #page-main{position:relative;z-index:1;min-height:100vh}
 /* ── 3단 레이아웃 ── */
-.main-layout {
-  padding-top: 48px;
-  display: flex;
-  max-width: 1140px;
-  margin: 0 auto;
-  position: relative;
-  z-index: 1;
-  min-height: 100vh;
-}
 /* 왼쪽 패널 */
 .left-panel {
-  width: 220px;
+  width: 260px;
   flex-shrink: 0;
-  padding: 12px 8px;
+  padding: 12px 10px;
   position: sticky;
   top: 0;
   height: 100vh;
@@ -425,6 +414,7 @@ input, textarea { font-family: var(--sans); color: var(--text); }
   display: flex;
   flex-direction: column;
   gap: 2px;
+  border-right: 1px solid var(--border);
 }
 .left-panel::-webkit-scrollbar { display: none; }
 .lnav-item {
@@ -1656,8 +1646,26 @@ async function loadWorldData() {
   const sc = document.getElementById('rstat-c'); if (sc) sc.textContent = currentWorldChars.length;
   const sd = document.getElementById('rside-desc'); if (sd) sd.textContent = currentWorld.description || '';
   // 오른쪽 사이드 세계관 카드 업데이트
-  const rcb = document.getElementById('rcard-banner'); if (rcb) rcb.style.background = currentWorld.banner_color || '#185FA5';
-  const re = document.getElementById('rcard-emoji'); if (re) re.textContent = currentWorld.icon_emoji || '🌍';
+  const rcb = document.getElementById('rcard-banner');
+  if (rcb) {
+    rcb.style.background = currentWorld.banner_color || '#185FA5';
+    if (currentWorld.banner_image_url) {
+      rcb.style.backgroundImage = `url(${currentWorld.banner_image_url})`;
+      rcb.style.backgroundSize = 'cover';
+      rcb.style.backgroundPosition = 'center';
+    } else {
+      rcb.style.backgroundImage = '';
+    }
+  }
+  // 아이콘 업데이트 (이미지 우선, 없으면 이모지)
+  const re = document.getElementById('rcard-emoji');
+  if (re) {
+    if (currentWorld.icon_image_url) {
+      re.innerHTML = `<img src="${currentWorld.icon_image_url}" style="width:32px;height:32px;border-radius:6px;object-fit:cover;border:2px solid rgba(255,255,255,0.3)" alt="">`;
+    } else {
+      re.innerHTML = currentWorld.icon_emoji || '<i class="ti ti-world" style="font-size:24px;color:rgba(255,255,255,0.9)"></i>';
+    }
+  }
   const rn = document.getElementById('rcard-name'); if (rn) rn.textContent = currentWorld.name;
   const rw = document.getElementById('rside-world'); if (rw) rw.style.display = '';
   // 이벤트 패널 표시
@@ -2810,6 +2818,20 @@ async function saveCustPanel() {
     applyWorldTheme(currentWorld);
     renderWorldTabs();
     renderWorldBanner();
+    // 우측 패널 즉시 반영
+    const rcb = document.getElementById('rcard-banner');
+    if (rcb) {
+      rcb.style.background = currentWorld.banner_color || '#185FA5';
+      if (currentWorld.banner_image_url) { rcb.style.backgroundImage = `url(${currentWorld.banner_image_url})`; rcb.style.backgroundSize = 'cover'; rcb.style.backgroundPosition = 'center'; }
+      else rcb.style.backgroundImage = '';
+    }
+    const re = document.getElementById('rcard-emoji');
+    if (re) {
+      if (currentWorld.icon_image_url) re.innerHTML = `<img src="${currentWorld.icon_image_url}" style="width:32px;height:32px;border-radius:6px;object-fit:cover;border:2px solid rgba(255,255,255,0.3)" alt="">`;
+      else re.innerHTML = currentWorld.icon_emoji || '<i class="ti ti-world" style="font-size:24px;color:rgba(255,255,255,0.9)"></i>';
+    }
+    const rn = document.getElementById('rcard-name'); if (rn) rn.textContent = currentWorld.name;
+    const rd = document.getElementById('rside-desc'); if (rd) rd.textContent = currentWorld.description || '';
   }
   closeCustPanel();
   toast('저장됐습니다');
@@ -3745,6 +3767,9 @@ async function uploadWorldIcon(e) {
     // 미리보기 박스 업데이트
     const preview = document.getElementById('icon-preview-box');
     if (preview) preview.innerHTML = `<img src="${d.urls[0]}" style="width:100%;height:100%;object-fit:cover;border-radius:9px" alt="">`;
+    // 우측 패널 업데이트
+    const re = document.getElementById('rcard-emoji');
+    if (re) re.innerHTML = `<img src="${d.urls[0]}" style="width:32px;height:32px;border-radius:6px;object-fit:cover;border:2px solid rgba(255,255,255,0.3)" alt="">`;
     // 사이드바 탭 업데이트
     const idx = appWorlds.findIndex(w => w.id === currentWorld.id);
     if (idx >= 0) appWorlds[idx] = { ...appWorlds[idx], icon_image_url: d.urls[0] };
