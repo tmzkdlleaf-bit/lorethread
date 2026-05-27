@@ -58,14 +58,14 @@ input, textarea { font-family: var(--sans); color: var(--text); }
 /* Layout */
 #app { min-height: 100vh; }
 .page { display: none; }
-.page.active { display: block; }
+.page.active { display: block; width: 100%; }
 
 /* ── 3단 레이아웃 ── */
 .main-wrap {
   display: flex;
   min-height: 100vh;
-  max-width: 1280px;
-  margin: 0 auto;
+  width: 100%;
+  justify-content: center;
   position: relative;
   z-index: 1;
 }
@@ -118,11 +118,6 @@ input, textarea { font-family: var(--sans); color: var(--text); }
 .user-av img { width: 100%; height: 100%; object-fit: cover; }
 
 /* ══ 3단 레이아웃 (좌=우=260px, 중앙=640px) ══ */
-.main-wrap {
-  display: flex;
-  min-height: 100vh;
-  background: var(--bg);
-}
 .main-layout {
   display: flex;
   width: 100%;
@@ -1755,10 +1750,11 @@ async function loadWorldData() {
   }
   const rn = document.getElementById('rcard-name'); if (rn) rn.textContent = currentWorld.name;
   const rw = document.getElementById('rside-world'); if (rw) rw.style.display = '';
-  // 이벤트 패널 표시
+  // 이벤트 패널 표시 + 즉시 데이터 로드
   const rEvents = document.getElementById('rside-events');
   if (rEvents) rEvents.style.display = '';
   const re2 = document.getElementById('rside-empty'); if (re2) re2.style.display = 'none';
+  loadEventTab();
   const compose = document.getElementById('compose-box');
   if (!compose) return;
   compose.style.display = myChars.length > 0 ? '' : 'none';
