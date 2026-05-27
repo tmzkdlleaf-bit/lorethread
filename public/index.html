@@ -4,8 +4,17 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Lorethread</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@300;400;500&family=Noto+Sans+KR:wght@300;400;500&display=swap">
+<!-- preconnect으로 DNS/TCP를 미리 열어둠 -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<!-- 폰트/아이콘: media trick으로 렌더링 블로킹 제거 -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css" media="print" onload="this.media='all'">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@300;400;500&family=Noto+Sans+KR:wght@300;400;500&display=swap" media="print" onload="this.media='all'">
+<noscript>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@300;400;500&family=Noto+Sans+KR:wght@300;400;500&display=swap">
+</noscript>
 <style>
 
 :root {
@@ -1247,8 +1256,8 @@ input, textarea { font-family: var(--sans); color: var(--text); }
 
 <script>
 // Cloudflare Pages 배포 시 이 값을 Railway URL로 변경하세요
-window.API_BASE = 'https://lorethread-production.up.railway.app';
-
+// 예: window.API_BASE = 'https://lorethread-production.up.railway.app';
+window.API_BASE = window.API_BASE || '';
 
 // ─── State ───
 let appUser = null;
@@ -1595,10 +1604,9 @@ async function initApp() {
   if (me) me.textContent = appUser.email || '';
   renderWorldTabs();
   initUserPill();
-  loadBookmarks();
-  loadDrafts();
+  // 비중요 작업은 병렬로
+  Promise.all([loadBookmarks(), loadDrafts(), loadNotifs()]);
   startSSE();
-  loadNotifs();
   if (appWorlds.length > 0) selectWorld(appWorlds[0]);
   else showHomeView();
 }
@@ -1776,7 +1784,6 @@ async function loadWorldData() {
       rcb.style.backgroundImage = '';
     }
   }
-  // 아이콘 업데이트 (이미지 우선, 없으면 이모지)
   const re = document.getElementById('rcard-emoji');
   if (re) {
     if (currentWorld.icon_image_url) {
@@ -1788,17 +1795,17 @@ async function loadWorldData() {
   const rn = document.getElementById('rcard-name'); if (rn) rn.textContent = currentWorld.name;
   const rw = document.getElementById('rside-world'); if (rw) rw.style.display = '';
   applyWorldBg(currentWorld);
-  // 이벤트 패널 표시 + 즉시 데이터 로드
   const rEvents = document.getElementById('rside-events');
   if (rEvents) rEvents.style.display = '';
   const re2 = document.getElementById('rside-empty'); if (re2) re2.style.display = 'none';
-  loadEventTab();
   const compose = document.getElementById('compose-box');
-  if (!compose) return;
-  compose.style.display = myChars.length > 0 ? '' : 'none';
-  if (myChars.length > 0) renderComposeChar();
+  if (compose) {
+    compose.style.display = myChars.length > 0 ? '' : 'none';
+    if (myChars.length > 0) renderComposeChar();
+  }
   renderSideMyChars();
-  await loadFeed();
+  // 피드와 이벤트를 병렬로 로드
+  await Promise.all([loadFeed(), loadEventTab()]);
 }
 
 function renderComposeChar() {

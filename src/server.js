@@ -7,6 +7,8 @@ import { parse as parseCookie } from 'cookie';
 import bcrypt from 'bcryptjs';
 import { nanoid } from 'nanoid';
 import { v2 as cloudinary } from 'cloudinary';
+import { createGzip } from 'zlib';
+import { pipeline } from 'stream';
 import {
   initDb, now, getDb,
   getUser, getUserByEmail, createUser, updateUser,
@@ -114,16 +116,34 @@ async function getSessionUser(req) {
   } catch { return null; }
 }
 
-function json(res, data, status = 200) {
-  res.writeHead(status, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify(data));
+function json(res, data, status = 200, cache = false) {
+  const body = JSON.stringify(data);
+  const headers = { 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' };
+  if (cache) headers['Cache-Control'] = 'public, max-age=10, stale-while-revalidate=30';
+  res.writeHead(status, headers);
+  const gz = createGzip();
+  gz.pipe(res);
+  gz.end(body);
 }
 function serveFile(res, fp) {
   try {
     const content = readFileSync(fp);
+    const ext = extname(fp).toLowerCase();
     const mime = { '.html':'text/html; charset=utf-8', '.css':'text/css', '.js':'application/javascript', '.png':'image/png', '.jpg':'image/jpeg', '.jpeg':'image/jpeg', '.gif':'image/gif', '.webp':'image/webp', '.mp4':'video/mp4', '.webm':'video/webm', '.svg':'image/svg+xml' };
-    res.writeHead(200, { 'Content-Type': mime[extname(fp).toLowerCase()] || 'application/octet-stream' });
-    res.end(content);
+    const isStatic = ['.css','.js','.png','.jpg','.jpeg','.gif','.webp','.svg'].includes(ext);
+    const isText = ['.html','.css','.js','.svg'].includes(ext);
+    const headers = { 'Content-Type': mime[ext] || 'application/octet-stream' };
+    if (isStatic) headers['Cache-Control'] = 'public, max-age=31536000, immutable';
+    if (isText) {
+      headers['Content-Encoding'] = 'gzip';
+      res.writeHead(200, headers);
+      const gz = createGzip();
+      gz.pipe(res);
+      gz.end(content);
+    } else {
+      res.writeHead(200, headers);
+      res.end(content);
+    }
   } catch { res.writeHead(404); res.end('Not found'); }
 }
 function makeSlug(name) {

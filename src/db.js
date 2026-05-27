@@ -49,6 +49,29 @@ export async function initDb() {
     CREATE TABLE IF NOT EXISTS dm_reads (user_id TEXT NOT NULL, room_id TEXT NOT NULL, last_read_at TEXT NOT NULL, PRIMARY KEY (user_id, room_id));
   `);
   console.log('✓ DB tables ready');
+  // 인덱스 (없으면 생성, 있으면 무시)
+  const indexes = [
+    `CREATE INDEX IF NOT EXISTS idx_posts_world_created ON posts(world_id, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_posts_char ON posts(character_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_posts_reply_to ON posts(reply_to_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_reactions_post ON reactions(post_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_reactions_unique ON reactions(post_id, character_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_post_media_post ON post_media(post_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(recipient_user_id, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications(recipient_user_id, is_read)`,
+    `CREATE INDEX IF NOT EXISTS idx_characters_world ON characters(world_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_characters_user ON characters(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_world_members_user ON world_members(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_dm_messages_room ON dm_messages(room_id, created_at ASC)`,
+    `CREATE INDEX IF NOT EXISTS idx_dm_reads_user ON dm_reads(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_events_world ON events(world_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_follows_follower ON follows(follower_character_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_follows_following ON follows(following_character_id)`,
+  ];
+  for (const sql of indexes) {
+    try { await pool.query(sql); } catch {}
+  }
   // 마이그레이션: 기존 테이블에 새 컬럼 추가
   const migrations = [
     `ALTER TABLE worlds ADD COLUMN IF NOT EXISTS custom_font TEXT DEFAULT ''`,
