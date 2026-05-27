@@ -152,7 +152,7 @@ const server = http.createServer(async (req, res) => {
       return serveFile(res, join(__dirname, '../public', rawPath));
     }
 
-    const user = getSessionUser(req);
+    const user = await getSessionUser(req);
 
     // ── SSE ──
     if (path === '/api/events') {
