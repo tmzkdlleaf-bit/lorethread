@@ -17,7 +17,7 @@ import {
   addPostMedia, getReaction, addReaction, removeReaction, getReactionCount,
   createNotif, getNotifs, getUnreadCount, markAllRead,
   getAnnouncements, createAnnouncement, deleteAnnouncement,
-  getFollowerCount, getFollowingCount, now, getDb, persist,
+  getFollowerCount, getFollowingCount, now, getDb, persist, initDb,
   createRoom, getRoomsByUser, getRoomById, addRoomMember, getRoomMembers,
   isRoomMember, createDmMessage, getDmMessages, getUnreadDmCount, markDmRead, findDmRoom
 } from './db.js';
@@ -661,7 +661,9 @@ const server = http.createServer(async (req, res) => {
 process.on('uncaughtException', err => console.error('[uncaughtException]', err));
 process.on('unhandledRejection', reason => console.error('[unhandledRejection]', reason));
 
-server.listen(PORT, () => {
+// DB 초기화 후 서버 시작
+initDb().then(() => {
+  server.listen(PORT, () => {
   console.log('\n🌟 Lorethread 서버 시작!');
   console.log(`👉 브라우저: http://localhost:${PORT}`);
   console.log('\nCtrl+C 로 종료\n');
