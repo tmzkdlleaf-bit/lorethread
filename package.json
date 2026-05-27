@@ -9,7 +9,10 @@
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^12.10.0",
+    "cloudinary": "^2.10.0",
     "cookie": "^0.6.0",
+    "dotenv": "^17.4.2",
     "nanoid": "^5.0.7"
   }
 }
