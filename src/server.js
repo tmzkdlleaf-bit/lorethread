@@ -170,7 +170,7 @@ const server = http.createServer(async (req, res) => {
       const b = await readBody(req);
       if (!b.email || !b.password || !b.display_name) return json(res, { error: '모든 항목을 입력해주세요.' }, 400);
       if (await getUserByEmail(b.email)) return json(res, { error: '이미 사용 중인 이메일입니다.' }, 400);
-      const db = getDb();
+      const pool = getDb();
       const { rows: _uf } = await pool.query('SELECT COUNT(*) as cnt FROM users');
       const isFirst = parseInt(_uf[0]?.cnt||0) === 0;
       const role = isFirst ? 'owner' : 'member';
@@ -263,7 +263,7 @@ const server = http.createServer(async (req, res) => {
       if (!user) return json(res, { error: 'Unauthorized' }, 401);
       const b = await readBody(req);
       if (!b.code) return json(res, { error: '코드를 입력해주세요.' }, 400);
-      const db = getDb();
+      const pool = getDb();
       const { rows: _inv } = await pool.query('SELECT * FROM invites WHERE code = $1', [b.code]);
       const invite = _inv[0] || null;
       if (!invite) return json(res, { error: '유효하지 않은 초대 코드입니다.' }, 404);
@@ -294,7 +294,7 @@ const server = http.createServer(async (req, res) => {
       if (!sub && m === 'DELETE') {
         if (!world) return json(res, { error: 'Not found' }, 404);
         if (!user || world.owner_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
-        const db = getDb();
+        const pool = getDb();
         // 관련 데이터 모두 삭제
         const { rows: _chars } = await pool.query('SELECT id FROM characters WHERE world_id = $1', [world.id]);
         for (const c of _chars) {
@@ -338,7 +338,7 @@ const server = http.createServer(async (req, res) => {
 
       if (sub === 'invite' && m === 'POST') {
         if (!user || world?.owner_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
-        const db = getDb();
+        const pool = getDb();
         const { rows: _existInv } = await pool.query('SELECT * FROM invites WHERE world_id = $1', [world.id]);
         const existing = _existInv[0] || null;
         if (existing) return json(res, { ok: true, code: existing.code });
@@ -368,7 +368,7 @@ const server = http.createServer(async (req, res) => {
       if (sub === 'events') {
         if (!world) return json(res, { error: 'Not found' }, 404);
         if (m === 'GET') {
-          const db = getDb();
+          const pool = getDb();
           const { rows: events } = await pool.query('SELECT * FROM events WHERE world_id = $1 ORDER BY start_date ASC', [world.id]);
           return json(res, { events });
         }
@@ -489,7 +489,7 @@ const server = http.createServer(async (req, res) => {
       if (sub === 'is-following' && m === 'GET') {
         const qs = new URL(req.url, `http://localhost:${PORT}`).searchParams;
         const myCharId = qs.get('character_id');
-        const db = getDb();
+        const pool = getDb();
         const { rows: _fol } = await pool.query('SELECT 1 FROM follows WHERE follower_character_id = $1 AND following_character_id = $2', [myCharId, charId]);
         const following = _fol.length > 0;
         return json(res, { following });
@@ -500,7 +500,7 @@ const server = http.createServer(async (req, res) => {
         const b = await readBody(req);
         const myChar = await getCharById(b.character_id);
         if (!myChar || myChar.user_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
-        const db = getDb();
+        const pool = getDb();
         const { rows: _folEx } = await pool.query('SELECT 1 FROM follows WHERE follower_character_id = $1 AND following_character_id = $2', [b.character_id, charId]);
         const existing = _folEx.length > 0;
         if (existing) {
@@ -538,7 +538,7 @@ const server = http.createServer(async (req, res) => {
         const c = await getCharById(charId);
         if (!c) return json(res, { error: 'Not found' }, 404);
         if (c.user_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
-        const db = getDb();
+        const pool = getDb();
         await pool.query('DELETE FROM char_sections WHERE character_id = $1', [charId]);
         await pool.query('DELETE FROM char_links WHERE character_id = $1', [charId]);
         const { rows: _cposts } = await pool.query('SELECT id FROM posts WHERE character_id = $1', [charId]);
@@ -584,7 +584,7 @@ const server = http.createServer(async (req, res) => {
         const c = await getCharById(post.character_id);
         if (!c || c.user_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
         const b = await readBody(req);
-        const db = getDb();
+        const pool = getDb();
         const updates = [];
         const vals = [];
         if (b.content !== undefined) { updates.push('content = ?'); vals.push(b.content); }
