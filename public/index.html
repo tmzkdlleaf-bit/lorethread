@@ -3950,7 +3950,12 @@ async function loadDmRooms(filter = 'all') {
   el.innerHTML = filtered.map(rm => {
     const isGroup = rm.type === 'group';
     const otherMembers = (rm.members || []).filter(m => m.user_id !== appUser?.id);
-    const displayName = isGroup ? (rm.name || '그룹 대화') : (otherMembers[0]?.char_name || '1:1 대화');
+    const getRmCharName = (m) => {
+      if (m.char_name) return m.char_name;
+      const worldChar = currentWorldChars?.find(c => c.user_id === m.user_id);
+      return worldChar?.name || '상대방';
+    };
+    const displayName = isGroup ? (rm.name || '그룹 대화') : (otherMembers[0] ? getRmCharName(otherMembers[0]) : '1:1 대화');
     const avLetter = displayName[0]?.toUpperCase() || '?';
     // 상대방 캐릭터 아바타 사용
     const otherChar = !isGroup && otherMembers[0];
@@ -4003,10 +4008,20 @@ async function openRoom(roomId) {
   av.style.color = isGroup ? 'var(--accent)' : 'var(--text2)';
   // 상대방 이름 표시
   const otherMembers = members.filter(m => m.user_id !== appUser?.id);
-  const displayName = isGroup ? (room.name || '그룹 대화') : (otherMembers[0]?.char_name || '1:1 대화');
+  const getCharName = (m) => {
+    if (m.char_name) return m.char_name;
+    const worldChar = currentWorldChars?.find(c => c.user_id === m.user_id);
+    return worldChar?.name || '상대방';
+  };
+  const displayName = isGroup ? (room.name || '그룹 대화') : (otherMembers[0] ? getCharName(otherMembers[0]) : '1:1 대화');
   av.textContent = displayName[0]?.toUpperCase() || '?';
   document.getElementById('dm-chat-name').textContent = displayName;
-  document.getElementById('dm-chat-members').textContent = members.map(m => m.char_name || m.display_name).join(', ');
+  document.getElementById('dm-chat-members').textContent = members.map(m => {
+    // char_name 우선, 없으면 현재 세계관에서 해당 유저의 캐릭터 찾기
+    if (m.char_name) return m.char_name;
+    const worldChar = currentWorldChars?.find(c => c.user_id === m.user_id);
+    return worldChar?.name || '멤버';
+  }).join(', ');
 
   // 내 캐릭터 선택 (select 방식)
   const charSel = document.getElementById('dm-char-selector');
@@ -4264,8 +4279,8 @@ function openNewRoomModal() {
     } else {
       el.innerHTML = members.map(m => `
         <div class="member-chip" onclick="toggleMember('${m.id}',this)">
-          <div class="member-chip-av" style="background:var(--accent-bg);color:var(--accent)">${m.char_name?m.char_name[0]:m.display_name[0]}</div>
-          <span>${m.char_name || m.display_name}</span>
+          <div class="member-chip-av" style="background:var(--accent-bg);color:var(--accent)">${(m.char_name || currentWorldChars?.find(c=>c.user_id===m.user_id)?.name || '?')[0]}</div>
+          <span>${m.char_name || currentWorldChars?.find(c=>c.user_id===m.user_id)?.name || '멤버'}</span>
         </div>`).join('');
     }
   });
