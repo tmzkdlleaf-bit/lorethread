@@ -450,6 +450,11 @@ const server = http.createServer(async (req, res) => {
               broadcast(mc.user_id, { type: 'mention', actor: char.name, handle, postId: id });
             }
           }
+          // 같은 세계관 멤버 전체에게 새 글 알림 broadcast
+          const worldMembers = await getWorldMembers(world.id);
+          for (const mem of worldMembers) {
+            if (mem.id !== user.id) broadcast(mem.id, { type: 'new_post', postId: id, worldId: world.id });
+          }
           return json(res, { ok: true, post: { ...await getPostById(id), userReacted: false } });
         }
       }
@@ -532,6 +537,12 @@ const server = http.createServer(async (req, res) => {
       const parts = path.slice('/api/posts/'.length).split('/');
       const postId = parts[0];
       const sub = parts[1] || '';
+
+      if (!sub && m === 'GET') {
+        const post = await getPostById(postId);
+        if (!post) return json(res, { error: 'Not found' }, 404);
+        return json(res, { post });
+      }
 
       if (sub === 'replies' && m === 'GET') return json(res, { replies: await getReplies(postId) });
 

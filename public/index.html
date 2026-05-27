@@ -117,24 +117,61 @@ input, textarea { font-family: var(--sans); color: var(--text); }
 .user-av { width: 28px; height: 28px; border-radius: 50%; background: var(--accent-bg); color: var(--accent); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; cursor: pointer; flex-shrink: 0; overflow: hidden; }
 .user-av img { width: 100%; height: 100%; object-fit: cover; }
 
-/* Main layout - 3 column */
+/* ══ 3단 레이아웃 (좌=우=260px, 중앙=640px) ══ */
+.main-wrap {
+  display: flex;
+  min-height: 100vh;
+  background: var(--bg);
+}
 .main-layout {
   display: flex;
-  max-width: 1280px;
-  margin: 0 auto;
-  position: relative;
-  z-index: 1;
-  min-height: 100vh;
   width: 100%;
+  max-width: 1160px;   /* 260 + 640 + 260 = 1160 */
+  margin: 0 auto;
+  min-height: 100vh;
 }
+.left-panel {
+  width: 260px;
+  min-width: 260px;
+  max-width: 260px;
+  flex-shrink: 0;
+  padding: 12px 10px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--bg2);
+  border-right: 1px solid var(--border);
+  box-sizing: border-box;
+}
+.left-panel::-webkit-scrollbar { display: none; }
 .feed-col {
   flex: 1;
   min-width: 0;
   max-width: 640px;
   min-height: 100vh;
   background: var(--bg2);
+  box-sizing: border-box;
 }
-.side-col { width: 260px; flex-shrink: 0; padding: 16px 14px; position: sticky; top: 0; height: 100vh; overflow-y: auto; border-left: 1px solid var(--border); }
+.side-col {
+  width: 260px;
+  min-width: 260px;
+  max-width: 260px;
+  flex-shrink: 0;
+  padding: 16px 14px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+  background: var(--bg2);
+  border-left: 1px solid var(--border);
+  box-sizing: border-box;
+}
+.side-col::-webkit-scrollbar { width: 3px; }
+.side-col::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
 
 /* World banner */
 .world-banner { position: relative; overflow: hidden; flex-shrink: 0; }
@@ -403,20 +440,6 @@ input, textarea { font-family: var(--sans); color: var(--text); }
 #page-main{position:relative;z-index:1;min-height:100vh}
 /* ── 3단 레이아웃 ── */
 /* 왼쪽 패널 */
-.left-panel {
-  width: 260px;
-  flex-shrink: 0;
-  padding: 12px 10px;
-  position: sticky;
-  top: 0;
-  height: 100vh;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  border-right: 1px solid var(--border);
-}
-.left-panel::-webkit-scrollbar { display: none; }
 .lnav-item {
   display: flex;
   align-items: center;
@@ -482,18 +505,7 @@ input, textarea { font-family: var(--sans); color: var(--text); }
 .notif-ptab:hover{color:var(--text)}
 .notif-ptab.active{color:var(--text);font-weight:500;border-bottom-color:var(--text)}
 
-/* ── 패널 배경 확실히 분리 ── */
-.left-panel {
-  background: var(--bg2);
-  border-right: 1px solid var(--border);
-}
-.side-col {
-  background: var(--bg2);
-  border-left: 1px solid var(--border);
-}
-.center-feed, .feed-col {
-  background: var(--bg2);
-}
+
 
 /* ── 왼쪽 패널 nav 구분 강화 ── */
 .lnav-item {
@@ -540,15 +552,7 @@ input, textarea { font-family: var(--sans); color: var(--text); }
 
 /* ── 북마크 버튼 확실한 구분 ── */
 
-.feed-col {
-  background: var(--bg2);
-  position: relative;
-  z-index: 1;
-}
-.side-col {
-  background: var(--bg2);
-  border-left: 1px solid var(--border);
-}
+
 /* ── nav 아이템 활성 색상 ── */
 .lnav-item.active {
   background: var(--accent-bg) !important;
@@ -1263,17 +1267,45 @@ function ensureAudio() {
 }
 document.addEventListener('click', ensureAudio, { once: true });
 
-function playNotifSound() {
+function playNotifSound(type = 'reply') {
   try {
     if (!audioCtx) return;
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
     osc.connect(gain); gain.connect(audioCtx.destination);
-    osc.frequency.setValueAtTime(880, audioCtx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(660, audioCtx.currentTime + 0.1);
-    gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.3);
-    osc.start(); osc.stop(audioCtx.currentTime + 0.3);
+
+    if (type === 'reply' || type === 'mention') {
+      // 답글/멘션: 두 음 (높→낮→높) 명확한 알림음
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+      osc.frequency.setValueAtTime(660, audioCtx.currentTime + 0.1);
+      osc.frequency.setValueAtTime(880, audioCtx.currentTime + 0.2);
+      gain.gain.setValueAtTime(0.18, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.4);
+      osc.start(); osc.stop(audioCtx.currentTime + 0.4);
+    } else if (type === 'react') {
+      // 좋아요: 짧고 부드러운 단음
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(660, audioCtx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(440, audioCtx.currentTime + 0.15);
+      gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.2);
+      osc.start(); osc.stop(audioCtx.currentTime + 0.2);
+    } else if (type === 'dm') {
+      // DM: 두 번 짧게
+      const osc2 = audioCtx.createOscillator();
+      const gain2 = audioCtx.createGain();
+      osc2.connect(gain2); gain2.connect(audioCtx.destination);
+      osc.type = 'sine'; osc2.type = 'sine';
+      osc.frequency.setValueAtTime(740, audioCtx.currentTime);
+      gain.gain.setValueAtTime(0.12, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.12);
+      osc.start(); osc.stop(audioCtx.currentTime + 0.12);
+      osc2.frequency.setValueAtTime(740, audioCtx.currentTime + 0.18);
+      gain2.gain.setValueAtTime(0.12, audioCtx.currentTime + 0.18);
+      gain2.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.3);
+      osc2.start(audioCtx.currentTime + 0.18); osc2.stop(audioCtx.currentTime + 0.3);
+    }
   } catch {}
 }
 
@@ -1551,29 +1583,88 @@ function startSSE() {
     const data = JSON.parse(e.data);
     if (data.type === 'reply' || data.type === 'mention') {
       loadNotifs();
-      playNotifSound();
+      playNotifSound('reply');
       toast(`${data.actor}님이 ${data.type === 'reply' ? '답글을 달았습니다' : '멘션했습니다'}`);
     }
     if (data.type === 'react') {
       loadNotifs();
+      playNotifSound('react');
       toast(`${data.actor}님이 좋아요를 눌렀습니다`);
     }
-    if (data.type === 'dm') {
-      // DM 실시간 수신
-      if (currentRoomId === data.roomId) {
-        loadDmMessages(); // 현재 방이면 즉시 갱신
-      } else {
-        // 다른 방이면 미읽음 표시 + 토스트
-        toast(`새 메시지가 왔습니다`);
-        loadDmRooms(); // 방 목록 갱신
+    if (data.type === 'new_post') {
+      // 현재 같은 세계관 피드를 보고 있으면 자동 삽입
+      if (currentWorld && data.worldId === currentWorld.id &&
+          (curCenterView === 'feed' || curCenterView === 'home')) {
+        fetchAndPrependPost(data.postId);
       }
-      // DM 폴링 재설정 (SSE 수신 시 폴링 불필요)
+    }
+    if (data.type === 'dm') {
+      if (currentRoomId === data.roomId) {
+        loadDmMessages();
+      } else {
+        playNotifSound('dm');
+        toast('새 메시지가 왔습니다');
+        loadDmRooms();
+      }
       if (dmPollInterval) { clearInterval(dmPollInterval); dmPollInterval = null; }
     }
   };
-  sseSource.onerror = () => {
-    // 연결 끊기면 5초 후 재시도
-    setTimeout(startSSE, 5000);
+  sseSource.onerror = () => { setTimeout(startSSE, 5000); };
+}
+
+let _newPostCount = 0;
+
+// 새 포스트를 서버에서 가져와 피드 맨 위에 삽입
+async function fetchAndPrependPost(postId) {
+  try {
+    const res = await api('GET', `/api/posts/${postId}`);
+    if (!res.post) return;
+    const post = res.post;
+    // 이미 피드에 있으면 스킵 (중복 방지)
+    if (feedPosts.some(p => p.id === post.id)) return;
+    // 내 포스트도 이미 submitPost에서 처리되므로 스킵
+    const myCharIds = currentWorldChars
+      .filter(c => c.user_id === appUser?.id)
+      .map(c => c.id);
+    if (myCharIds.includes(post.character_id)) return;
+    // 피드 배열 맨 앞에 추가
+    feedPosts.unshift(post);
+    // 애니메이션과 함께 DOM에 삽입
+    const feedEl = document.getElementById('feed-list');
+    if (!feedEl) return;
+    const div = document.createElement('div');
+    div.innerHTML = renderPost(post, false);
+    const newEl = div.firstElementChild;
+    if (newEl) {
+      newEl.style.opacity = '0';
+      newEl.style.transform = 'translateY(-8px)';
+      newEl.style.transition = 'opacity .3s ease, transform .3s ease';
+      feedEl.insertBefore(newEl, feedEl.firstChild);
+      requestAnimationFrame(() => {
+        newEl.style.opacity = '1';
+        newEl.style.transform = 'translateY(0)';
+      });
+    }
+  } catch (e) {
+    console.error('fetchAndPrependPost error:', e);
+  }
+}
+
+function showNewPostBanner() {
+  _newPostCount++;
+  let banner = document.getElementById('new-post-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'new-post-banner';
+    banner.style.cssText = 'position:sticky;top:0;z-index:50;background:var(--accent);color:white;text-align:center;padding:9px;font-size:13px;cursor:pointer;font-weight:500;letter-spacing:.01em';
+    banner.onclick = () => { _newPostCount = 0; banner.remove(); loadFeed(true); window.scrollTo(0,0); };
+    const feedList = document.getElementById('feed-list');
+    feedList?.parentNode?.insertBefore(banner, feedList);
+  }
+  banner.innerHTML = `<i class="ti ti-arrow-up" style="margin-right:5px"></i>새 게시글 ${_newPostCount}개 보기`;
+}
+
+
   };
 }
 
