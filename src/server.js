@@ -454,7 +454,10 @@ const server = http.createServer(async (req, res) => {
           const id = nanoid();
           await createPost({ id, character_id: b.character_id, world_id: world.id, content: b.content || '', reply_to_id: b.reply_to_id || null, created_at: now() });
           if (b.media_urls?.length) {
-            b.media_urls.slice(0, 4).forEach((u, i) => await addPostMedia({ id: nanoid(), post_id: id, url: u, media_type: /\.(mp4|webm)$/i.test(u) ? 'video' : 'image', sort_order: i }));
+            for (let i = 0; i < Math.min(b.media_urls.length, 4); i++) {
+              const u = b.media_urls[i];
+              await addPostMedia({ id: nanoid(), post_id: id, url: u, media_type: /\.(mp4|webm)$/i.test(u) ? 'video' : 'image', sort_order: i });
+            }
           }
           if (b.reply_to_id) {
             const parent = await getPostById(b.reply_to_id);
@@ -563,9 +566,15 @@ const server = http.createServer(async (req, res) => {
         const ancestors = [];
         let cur = post.reply_to_id ? await getPostById(post.reply_to_id) : null;
         while (cur) { ancestors.unshift(cur); cur = cur.reply_to_id ? await getPostById(cur.reply_to_id) : null; }
-        const myCharIds = user ? await getCharsByUser(user.id, post.world_id).map(c => c.id) : [];
-        const enrich = p => ({ ...p, userReacted: myCharIds.some(cid => !!await getReaction(p.id, cid)) });
-        return json(res, { ancestors: ancestors.map(enrich), post: enrich(post), replies: await getReplies(postId).map(enrich) });
+        const _mc = user ? await getCharsByUser(user.id, post.world_id) : [];
+        const myCharIds = _mc.map(c => c.id);
+        const enrichAsync = async p => ({ ...p, userReacted: (await Promise.all(myCharIds.map(cid => getReaction(p.id, cid)))).some(Boolean) });
+        const _replies = await getReplies(postId);
+        return json(res, {
+          ancestors: await Promise.all(ancestors.map(enrichAsync)),
+          post: await enrichAsync(post),
+          replies: await Promise.all(_replies.map(enrichAsync))
+        });
       }
 
       if (!sub && m === 'PATCH') {
