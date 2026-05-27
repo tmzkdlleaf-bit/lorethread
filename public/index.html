@@ -1246,6 +1246,9 @@ input, textarea { font-family: var(--sans); color: var(--text); }
 <div class="toast" id="toast"></div>
 
 <script>
+// Cloudflare Pages 배포 시 이 값을 Railway URL로 변경하세요
+// 예: window.API_BASE = 'https://lorethread-production.up.railway.app';
+window.API_BASE = window.API_BASE || '';
 
 // ─── State ───
 let appUser = null;
@@ -1316,10 +1319,11 @@ function playNotifSound(type = 'reply') {
 }
 
 // ─── API helpers ───
+const API_BASE = window.API_BASE || '';
 async function api(method, path, body) {
-  const opts = { method, headers: {} };
+  const opts = { method, headers: {}, credentials: 'include' };
   if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
-  const res = await fetch(path, opts);
+  const res = await fetch(API_BASE + path, opts);
   return res.json();
 }
 
@@ -1606,7 +1610,7 @@ function showPage(id) {
 
 function startSSE() {
   if (sseSource) sseSource.close();
-  sseSource = new EventSource('/api/events');
+  sseSource = new EventSource(API_BASE + '/api/events', { withCredentials: true });
   sseSource.onmessage = (e) => {
     const data = JSON.parse(e.data);
     if (data.type === 'reply' || data.type === 'mention') {
@@ -2626,7 +2630,7 @@ function renderCharLinksUI() {
 async function previewAvatar(e) {
   const file = e.target.files[0]; if (!file) return;
   const form = new FormData(); form.append('file', file);
-  const res = await fetch('/api/upload', { method: 'POST', body: form });
+  const res = await fetch(API_BASE + '/api/upload', { method: 'POST', body: form, credentials: 'include' });
   const data = await res.json();
   if (data.urls?.[0]) { charAvatarUrl = data.urls[0]; updateCharAvPreview(); }
 }
@@ -2635,7 +2639,7 @@ const uploadAv = (e) => previewAvatar(e);
 async function previewHeader(e) {
   const file = e.target.files[0]; if (!file) return;
   const form = new FormData(); form.append('file', file);
-  const res = await fetch('/api/upload', { method: 'POST', body: form });
+  const res = await fetch(API_BASE + '/api/upload', { method: 'POST', body: form, credentials: 'include' });
   const data = await res.json();
   if (data.urls?.[0]) {
     charHeaderUrl = data.urls[0];
@@ -3225,7 +3229,7 @@ function applyWorldBg(world) {
 async function uploadWorldBg(e) {
   const f = e.target.files[0]; if (!f) return;
   const fm = new FormData(); fm.append('file', f);
-  const r = await fetch('/api/upload', { method: 'POST', body: fm });
+  const r = await fetch(API_BASE + '/api/upload', { method: 'POST', body: fm, credentials: 'include' });
   const d = await r.json();
   if (d.urls?.[0]) {
     const bg = document.getElementById('world-bg');
@@ -3336,7 +3340,7 @@ async function uploadFiles(files) {
     const compressed = await compressImage(file);
     const form = new FormData();
     form.append('file', compressed);
-    const res = await fetch('/api/upload', { method: 'POST', body: form });
+    const res = await fetch(API_BASE + '/api/upload', { method: 'POST', body: form, credentials: 'include' });
     const data = await res.json();
     return data.urls?.[0] || null;
   }));
@@ -3915,7 +3919,7 @@ async function loadDmUnreadBadge() {
 async function uploadBannerImg(e) {
   const f = e.target.files[0]; if (!f) return;
   const fm = new FormData(); fm.append('file', f);
-  const r = await fetch('/api/upload', { method:'POST', body:fm });
+  const r = await fetch(API_BASE + '/api/upload', { method:'POST', body:fm, credentials:'include' });
   const d = await r.json();
   if (d.urls?.[0]) {
     currentWorld.banner_image_url = d.urls[0];
@@ -4054,7 +4058,7 @@ function closeCharDetail() {
 async function uploadWorldIcon(e) {
   const f = e.target.files[0]; if (!f) return;
   const fm = new FormData(); fm.append('file', f);
-  const r = await fetch('/api/upload', { method:'POST', body:fm });
+  const r = await fetch(API_BASE + '/api/upload', { method:'POST', body:fm, credentials:'include' });
   const d = await r.json();
   if (d.urls?.[0]) {
     currentWorld.icon_image_url = d.urls[0];
