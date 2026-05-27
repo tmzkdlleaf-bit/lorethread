@@ -664,7 +664,11 @@ process.on('unhandledRejection', reason => console.error('[unhandledRejection]',
 // DB 초기화 후 서버 시작
 initDb().then(() => {
   server.listen(PORT, () => {
-  console.log('\n🌟 Lorethread 서버 시작!');
-  console.log(`👉 브라우저: http://localhost:${PORT}`);
-  console.log('\nCtrl+C 로 종료\n');
+    console.log('\n🌟 Lorethread 서버 시작!');
+    console.log(`👉 브라우저: http://localhost:${PORT}`);
+    console.log('\nCtrl+C 로 종료\n');
+  });
+}).catch(err => {
+  console.error('DB 초기화 실패:', err);
+  process.exit(1);
 });
