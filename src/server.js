@@ -105,14 +105,14 @@ async function readMultipart(req) {
   });
 }
 
-function getSessionUser(req) {
+async function getSessionUser(req) {
   try {
     const cookies = parseCookie(req.headers.cookie || '');
     const sid = cookies.session;
     if (!sid) return null;
-    const sess = getSession(sid);
+    const sess = await getSession(sid);
     if (!sess) return null;
-    return getUser(sess.user_id);
+    return await getUser(sess.user_id);
   } catch { return null; }
 }
 
@@ -169,45 +169,45 @@ const server = http.createServer(async (req, res) => {
     if (path === '/api/auth/register' && m === 'POST') {
       const b = await readBody(req);
       if (!b.email || !b.password || !b.display_name) return json(res, { error: '모든 항목을 입력해주세요.' }, 400);
-      if (getUserByEmail(b.email)) return json(res, { error: '이미 사용 중인 이메일입니다.' }, 400);
+      if (await getUserByEmail(b.email)) return json(res, { error: '이미 사용 중인 이메일입니다.' }, 400);
       const db = getDb();
       const isFirst = db.prepare('SELECT COUNT(*) as cnt FROM users').get().cnt === 0;
       const role = isFirst ? 'owner' : 'member';
       const hash = await bcrypt.hash(b.password, 10);
       const id = nanoid();
-      createUser({ id, email: b.email, password_hash: hash, display_name: b.display_name, role, theme: 'light', created_at: now() });
+      await createUser({ id, email: b.email, password_hash: hash, display_name: b.display_name, role, theme: 'light', created_at: now() });
       const sid = nanoid(32);
-      createSession({ id: sid, user_id: id, created_at: now() });
+      await createSession({ id: sid, user_id: id, created_at: now() });
       res.setHeader('Set-Cookie', `session=${sid}; Path=/; HttpOnly; Max-Age=2592000`);
       return json(res, { ok: true, user: { id, email: b.email, display_name: b.display_name, role } });
     }
 
     if (path === '/api/auth/login' && m === 'POST') {
       const b = await readBody(req);
-      const u = getUserByEmail(b.email);
+      const u = await getUserByEmail(b.email);
       if (!u || !(await bcrypt.compare(b.password, u.password_hash))) return json(res, { error: '이메일 또는 비밀번호가 올바르지 않습니다.' }, 401);
       const sid = nanoid(32);
-      createSession({ id: sid, user_id: u.id, created_at: now() });
+      await createSession({ id: sid, user_id: u.id, created_at: now() });
       res.setHeader('Set-Cookie', `session=${sid}; Path=/; HttpOnly; Max-Age=2592000`);
       return json(res, { ok: true, user: { id: u.id, email: u.email, display_name: u.display_name, role: u.role } });
     }
 
     if (path === '/api/auth/logout' && m === 'POST') {
       const cookies = parseCookie(req.headers.cookie || '');
-      if (cookies.session) deleteSession(cookies.session);
+      if (cookies.session) await deleteSession(cookies.session);
       res.setHeader('Set-Cookie', 'session=; Path=/; Max-Age=0');
       return json(res, { ok: true });
     }
 
     if (path === '/api/auth/me') {
       if (!user) return json(res, { user: null });
-      return json(res, { user: { id: user.id, email: user.email, display_name: user.display_name, role: user.role, theme: user.theme }, worlds: getWorldsByUser(user.id) });
+      return json(res, { user: { id: user.id, email: user.email, display_name: user.display_name, role: user.role, theme: user.theme }, worlds: await getWorldsByUser(user.id) });
     }
 
     if (path === '/api/user/theme' && m === 'POST') {
       if (!user) return json(res, { error: 'Unauthorized' }, 401);
       const b = await readBody(req);
-      updateUser(user.id, { theme: b.theme });
+      await updateUser(user.id, { theme: b.theme });
       return json(res, { ok: true });
     }
 
@@ -219,11 +219,11 @@ const server = http.createServer(async (req, res) => {
 
     if (path === '/api/notifications' && m === 'GET') {
       if (!user) return json(res, { error: 'Unauthorized' }, 401);
-      return json(res, { notifications: getNotifs(user.id), unread: getUnreadCount(user.id) });
+      return json(res, { notifications: await getNotifs(user.id), unread: await getUnreadCount(user.id) });
     }
     if (path === '/api/notifications/read' && m === 'POST') {
       if (!user) return json(res, { error: 'Unauthorized' }, 401);
-      markAllRead(user.id);
+      await markAllRead(user.id);
       return json(res, { ok: true });
     }
 
@@ -233,7 +233,7 @@ const server = http.createServer(async (req, res) => {
       const sessions = db.prepare('SELECT DISTINCT user_id FROM sessions').all();
       const seen = new Set();
       const accounts = sessions.map(s => {
-        const u = getUser(s.user_id);
+        const u = await getUser(s.user_id);
         if (!u || seen.has(u.id)) return null;
         seen.add(u.id);
         return { user_id: u.id, display_name: u.display_name, email: u.email, role: u.role };
@@ -242,13 +242,13 @@ const server = http.createServer(async (req, res) => {
     }
     if (path === '/api/accounts/switch' && m === 'POST') {
       const b = await readBody(req);
-      const target = getUser(b.user_id);
+      const target = await getUser(b.user_id);
       if (!target) return json(res, { error: '계정을 찾을 수 없습니다.' }, 404);
       const db = getDb();
       let sess = db.prepare('SELECT * FROM sessions WHERE user_id = ? LIMIT 1').get(target.id);
       if (!sess) {
         const sid = nanoid(32);
-        createSession({ id: sid, user_id: target.id, created_at: now() });
+        await createSession({ id: sid, user_id: target.id, created_at: now() });
         sess = { id: sid };
       }
       res.setHeader('Set-Cookie', `session=${sess.id}; Path=/; HttpOnly; Max-Age=2592000`);
@@ -263,9 +263,9 @@ const server = http.createServer(async (req, res) => {
       const db = getDb();
       const invite = db.prepare('SELECT * FROM invites WHERE code = ?').get(b.code);
       if (!invite) return json(res, { error: '유효하지 않은 초대 코드입니다.' }, 404);
-      const targetWorld = getWorldById(invite.world_id);
+      const targetWorld = await getWorldById(invite.world_id);
       if (!targetWorld) return json(res, { error: '세계관을 찾을 수 없습니다.' }, 404);
-      addWorldMember(targetWorld.id, user.id);
+      await addWorldMember(targetWorld.id, user.id);
       return json(res, { ok: true, world: targetWorld });
     }
 
@@ -276,16 +276,16 @@ const server = http.createServer(async (req, res) => {
       if (!b.name) return json(res, { error: '세계관 이름을 입력해주세요.' }, 400);
       const slug = makeSlug(b.name);
       const id = nanoid();
-      createWorld({ id, owner_id: user.id, name: b.name, slug, description: b.description || '', banner_color: b.banner_color || '#185FA5', icon_emoji: b.icon_emoji || '🌍', announce_text: b.announce_text || '', created_at: now() });
-      addWorldMember(id, user.id);
-      return json(res, { ok: true, world: getWorldBySlug(slug) });
+      await createWorld({ id, owner_id: user.id, name: b.name, slug, description: b.description || '', banner_color: b.banner_color || '#185FA5', icon_emoji: b.icon_emoji || '🌍', announce_text: b.announce_text || '', created_at: now() });
+      await addWorldMember(id, user.id);
+      return json(res, { ok: true, world: await getWorldBySlug(slug) });
     }
 
     if (path.startsWith('/api/worlds/')) {
       const parts = path.slice('/api/worlds/'.length).split('/');
       const slug = parts[0];
       const sub = parts[1] || '';
-      const world = getWorldBySlug(slug);
+      const world = await getWorldBySlug(slug);
 
       if (!sub && m === 'DELETE') {
         if (!world) return json(res, { error: 'Not found' }, 404);
@@ -315,12 +315,12 @@ const server = http.createServer(async (req, res) => {
       if (!sub) {
         if (m === 'GET') {
           if (!world) return json(res, { error: 'Not found' }, 404);
-          return json(res, { world, members: getWorldMembers(world.id) });
+          return json(res, { world, members: await getWorldMembers(world.id) });
         }
         if (m === 'PATCH') {
           if (!world || world.owner_id !== user?.id) return json(res, { error: 'Forbidden' }, 403);
           const b = await readBody(req);
-          const updated = updateWorld(world.id, b);
+          const updated = await updateWorld(world.id, b);
           return json(res, { ok: true, world: updated || world });
         }
       }
@@ -328,7 +328,7 @@ const server = http.createServer(async (req, res) => {
       if (sub === 'join' && m === 'POST') {
         if (!user) return json(res, { error: 'Unauthorized' }, 401);
         if (!world) return json(res, { error: 'Not found' }, 404);
-        addWorldMember(world.id, user.id);
+        await addWorldMember(world.id, user.id);
         return json(res, { ok: true });
       }
 
@@ -344,19 +344,19 @@ const server = http.createServer(async (req, res) => {
 
       if (sub === 'announcements') {
         if (!world) return json(res, { error: 'Not found' }, 404);
-        if (m === 'GET') return json(res, { announcements: getAnnouncements(world.id) });
+        if (m === 'GET') return json(res, { announcements: await getAnnouncements(world.id) });
         if (m === 'POST') {
           if (!user || world.owner_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
           const b = await readBody(req);
           if (!b.title) return json(res, { error: '제목을 입력해주세요.' }, 400);
-          createAnnouncement({ id: nanoid(), world_id: world.id, title: b.title, content: b.content || '', author_id: user.id, created_at: now() });
+          await createAnnouncement({ id: nanoid(), world_id: world.id, title: b.title, content: b.content || '', author_id: user.id, created_at: now() });
           return json(res, { ok: true });
         }
       }
 
       if (parts[1] === 'announcements' && parts[2] && m === 'DELETE') {
         if (!user || world?.owner_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
-        deleteAnnouncement(parts[2]);
+        await deleteAnnouncement(parts[2]);
         return json(res, { ok: true });
       }
 
@@ -388,32 +388,32 @@ const server = http.createServer(async (req, res) => {
         if (!world) return json(res, { error: 'Not found' }, 404);
         const qs = new URL(req.url, `http://localhost:${PORT}`).searchParams;
         const offset = parseInt(qs.get('offset') || '0');
-        const myCharIds = user ? getCharsByUser(user.id, world.id).map(c => c.id) : [];
+        const myCharIds = user ? await getCharsByUser(user.id, world.id).map(c => c.id) : [];
         const db = getDb();
         const followingCharIds = db.prepare(
           `SELECT following_character_id FROM follows WHERE follower_character_id IN (${myCharIds.map(()=>'?').join(',') || "''"})`)
           .all(...myCharIds).map(f => f.following_character_id);
         if (!followingCharIds.length) return json(res, { posts: [] });
-        const posts = getPostsByWorld(world.id, 30, offset)
+        const posts = await getPostsByWorld(world.id, 30, offset)
           .filter(p => followingCharIds.includes(p.character_id))
-          .map(p => ({ ...p, userReacted: myCharIds.some(cid => !!getReaction(p.id, cid)) }));
+          .map(p => ({ ...p, userReacted: myCharIds.some(cid => !!await getReaction(p.id, cid)) }));
         return json(res, { posts });
       }
 
       if (sub === 'characters') {
         if (!world) return json(res, { error: 'Not found' }, 404);
-        if (m === 'GET') return json(res, { characters: getCharsByWorld(world.id) });
+        if (m === 'GET') return json(res, { characters: await getCharsByWorld(world.id) });
         if (m === 'POST') {
           if (!user) return json(res, { error: 'Unauthorized' }, 401);
           const b = await readBody(req);
           if (!b.name || !b.handle) return json(res, { error: '이름과 핸들을 입력해주세요.' }, 400);
           const handle = b.handle.toLowerCase().trim().replace(/[^a-z0-9_가-힣]/gi, '').slice(0, 20);
-          if (getCharByHandle(world.id, handle)) return json(res, { error: '이미 사용 중인 핸들입니다.' }, 400);
+          if (await getCharByHandle(world.id, handle)) return json(res, { error: '이미 사용 중인 핸들입니다.' }, 400);
           const id = nanoid();
-          createChar({ id, user_id: user.id, world_id: world.id, name: b.name, handle, role: b.role||'', bio: b.bio||'', color_bg: b.color_bg||'#E6F1FB', color_fg: b.color_fg||'#185FA5', avatar_url: b.avatar_url||'', header_url: b.header_url||'', is_npc: b.is_npc?1:0, created_at: now() });
-          if (b.sections?.length) setCharSections(id, b.sections);
-          if (b.links?.length) setCharLinks(id, b.links);
-          return json(res, { ok: true, character: getCharById(id) });
+          await createChar({ id, user_id: user.id, world_id: world.id, name: b.name, handle, role: b.role||'', bio: b.bio||'', color_bg: b.color_bg||'#E6F1FB', color_fg: b.color_fg||'#185FA5', avatar_url: b.avatar_url||'', header_url: b.header_url||'', is_npc: b.is_npc?1:0, created_at: now() });
+          if (b.sections?.length) await setCharSections(id, b.sections);
+          if (b.links?.length) await setCharLinks(id, b.links);
+          return json(res, { ok: true, character: await getCharById(id) });
         }
       }
 
@@ -423,8 +423,8 @@ const server = http.createServer(async (req, res) => {
           const qs = new URL(req.url, `http://localhost:${PORT}`).searchParams;
           const offset = parseInt(qs.get('offset') || '0');
           const tag = qs.get('tag') || '';
-          const myCharIds = user ? getCharsByUser(user.id, world.id).map(c => c.id) : [];
-          let posts = getPostsByWorld(world.id, 30, offset).map(p => ({ ...p, userReacted: myCharIds.some(cid => !!getReaction(p.id, cid)) }));
+          const myCharIds = user ? await getCharsByUser(user.id, world.id).map(c => c.id) : [];
+          let posts = await getPostsByWorld(world.id, 30, offset).map(p => ({ ...p, userReacted: myCharIds.some(cid => !!await getReaction(p.id, cid)) }));
           if (tag) posts = posts.filter(p => p.content?.toLowerCase().includes('#' + tag.toLowerCase()));
           return json(res, { posts });
         }
@@ -433,28 +433,28 @@ const server = http.createServer(async (req, res) => {
           const b = await readBody(req);
           if (!b.content && !b.media_urls?.length) return json(res, { error: '내용을 입력해주세요.' }, 400);
           if (!b.character_id) return json(res, { error: '캐릭터를 선택해주세요.' }, 400);
-          const char = getCharsByUser(user.id, world.id).find(c => c.id === b.character_id);
+          const char = await getCharsByUser(user.id, world.id).find(c => c.id === b.character_id);
           if (!char) return json(res, { error: '본인 캐릭터가 아닙니다.' }, 403);
           const id = nanoid();
-          createPost({ id, character_id: b.character_id, world_id: world.id, content: b.content || '', reply_to_id: b.reply_to_id || null, created_at: now() });
+          await createPost({ id, character_id: b.character_id, world_id: world.id, content: b.content || '', reply_to_id: b.reply_to_id || null, created_at: now() });
           if (b.media_urls?.length) {
-            b.media_urls.slice(0, 4).forEach((u, i) => addPostMedia({ id: nanoid(), post_id: id, url: u, media_type: /\.(mp4|webm)$/i.test(u) ? 'video' : 'image', sort_order: i }));
+            b.media_urls.slice(0, 4).forEach((u, i) => await addPostMedia({ id: nanoid(), post_id: id, url: u, media_type: /\.(mp4|webm)$/i.test(u) ? 'video' : 'image', sort_order: i }));
           }
           if (b.reply_to_id) {
-            const parent = getPostById(b.reply_to_id);
+            const parent = await getPostById(b.reply_to_id);
             if (parent && parent.user_id && parent.user_id !== user.id) {
-              createNotif({ id: nanoid(), recipient_user_id: parent.user_id, type: 'reply', actor_character_id: b.character_id, post_id: id, created_at: now() });
+              await createNotif({ id: nanoid(), recipient_user_id: parent.user_id, type: 'reply', actor_character_id: b.character_id, post_id: id, created_at: now() });
               broadcast(parent.user_id, { type: 'reply', actor: char.name, postId: id });
             }
           }
           for (const [, handle] of (b.content || '').matchAll(/@([a-z0-9_가-힣]+)/gi)) {
-            const mc = getCharByHandle(world.id, handle);
+            const mc = await getCharByHandle(world.id, handle);
             if (mc && mc.user_id !== user.id) {
-              createNotif({ id: nanoid(), recipient_user_id: mc.user_id, type: 'mention', actor_character_id: b.character_id, post_id: id, created_at: now() });
+              await createNotif({ id: nanoid(), recipient_user_id: mc.user_id, type: 'mention', actor_character_id: b.character_id, post_id: id, created_at: now() });
               broadcast(mc.user_id, { type: 'mention', actor: char.name, handle, postId: id });
             }
           }
-          return json(res, { ok: true, post: { ...getPostById(id), userReacted: false } });
+          return json(res, { ok: true, post: { ...await getPostById(id), userReacted: false } });
         }
       }
 
@@ -478,7 +478,7 @@ const server = http.createServer(async (req, res) => {
       if (sub === 'follow' && m === 'POST') {
         if (!user) return json(res, { error: 'Unauthorized' }, 401);
         const b = await readBody(req);
-        const myChar = getCharById(b.character_id);
+        const myChar = await getCharById(b.character_id);
         if (!myChar || myChar.user_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
         const db = getDb();
         const existing = db.prepare('SELECT 1 FROM follows WHERE follower_character_id = ? AND following_character_id = ?').get(b.character_id, charId);
@@ -487,34 +487,34 @@ const server = http.createServer(async (req, res) => {
         } else {
           db.prepare('INSERT OR IGNORE INTO follows (id,follower_character_id,following_character_id,created_at) VALUES (?,?,?,?)').run(nanoid(), b.character_id, charId, now());
         }
-        return json(res, { ok: true, followed: !existing, followerCount: getFollowerCount(charId) });
+        return json(res, { ok: true, followed: !existing, followerCount: await getFollowerCount(charId) });
       }
 
       if (!sub && m === 'GET') {
-        const c = getCharById(charId);
+        const c = await getCharById(charId);
         if (!c) return json(res, { error: 'Not found' }, 404);
-        c.sections = getCharSections(charId);
-        c.links = getCharLinks(charId);
-        return json(res, { character: c, posts: getPostsByChar(charId, 20), followerCount: getFollowerCount(charId), followingCount: getFollowingCount(charId) });
+        c.sections = await getCharSections(charId);
+        c.links = await getCharLinks(charId);
+        return json(res, { character: c, posts: await getPostsByChar(charId, 20), followerCount: await getFollowerCount(charId), followingCount: await getFollowingCount(charId) });
       }
 
       if (!sub && m === 'PATCH') {
         if (!user) return json(res, { error: 'Unauthorized' }, 401);
-        const c = getCharById(charId);
+        const c = await getCharById(charId);
         if (!c || c.user_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
         const b = await readBody(req);
-        updateChar(charId, b);
-        if (b.sections) setCharSections(charId, b.sections);
-        if (b.links) setCharLinks(charId, b.links);
-        const updated = getCharById(charId);
-        updated.sections = getCharSections(charId);
-        updated.links = getCharLinks(charId);
+        await updateChar(charId, b);
+        if (b.sections) await setCharSections(charId, b.sections);
+        if (b.links) await setCharLinks(charId, b.links);
+        const updated = await getCharById(charId);
+        updated.sections = await getCharSections(charId);
+        updated.links = await getCharLinks(charId);
         return json(res, { ok: true, character: updated });
       }
 
       if (!sub && m === 'DELETE') {
         if (!user) return json(res, { error: 'Unauthorized' }, 401);
-        const c = getCharById(charId);
+        const c = await getCharById(charId);
         if (!c) return json(res, { error: 'Not found' }, 404);
         if (c.user_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
         const db = getDb();
@@ -537,24 +537,24 @@ const server = http.createServer(async (req, res) => {
       const postId = parts[0];
       const sub = parts[1] || '';
 
-      if (sub === 'replies' && m === 'GET') return json(res, { replies: getReplies(postId) });
+      if (sub === 'replies' && m === 'GET') return json(res, { replies: await getReplies(postId) });
 
       if (sub === 'thread' && m === 'GET') {
-        const post = getPostById(postId);
+        const post = await getPostById(postId);
         if (!post) return json(res, { error: 'Not found' }, 404);
         const ancestors = [];
-        let cur = post.reply_to_id ? getPostById(post.reply_to_id) : null;
-        while (cur) { ancestors.unshift(cur); cur = cur.reply_to_id ? getPostById(cur.reply_to_id) : null; }
-        const myCharIds = user ? getCharsByUser(user.id, post.world_id).map(c => c.id) : [];
-        const enrich = p => ({ ...p, userReacted: myCharIds.some(cid => !!getReaction(p.id, cid)) });
-        return json(res, { ancestors: ancestors.map(enrich), post: enrich(post), replies: getReplies(postId).map(enrich) });
+        let cur = post.reply_to_id ? await getPostById(post.reply_to_id) : null;
+        while (cur) { ancestors.unshift(cur); cur = cur.reply_to_id ? await getPostById(cur.reply_to_id) : null; }
+        const myCharIds = user ? await getCharsByUser(user.id, post.world_id).map(c => c.id) : [];
+        const enrich = p => ({ ...p, userReacted: myCharIds.some(cid => !!await getReaction(p.id, cid)) });
+        return json(res, { ancestors: ancestors.map(enrich), post: enrich(post), replies: await getReplies(postId).map(enrich) });
       }
 
       if (!sub && m === 'PATCH') {
         if (!user) return json(res, { error: 'Unauthorized' }, 401);
-        const post = getPostById(postId);
+        const post = await getPostById(postId);
         if (!post) return json(res, { error: 'Not found' }, 404);
-        const c = getCharById(post.character_id);
+        const c = await getCharById(post.character_id);
         if (!c || c.user_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
         const b = await readBody(req);
         const db = getDb();
@@ -564,34 +564,34 @@ const server = http.createServer(async (req, res) => {
         if (b.is_pinned !== undefined) { updates.push('is_pinned = ?'); vals.push(b.is_pinned ? 1 : 0); }
         updates.push('edited_at = ?'); vals.push(now());
         db.prepare(`UPDATE posts SET ${updates.join(', ')} WHERE id = ?`).run(...vals, postId);
-        return json(res, { ok: true, post: getPostById(postId) });
+        return json(res, { ok: true, post: await getPostById(postId) });
       }
 
       if (sub === 'react' && m === 'POST') {
         if (!user) return json(res, { error: 'Unauthorized' }, 401);
         const b = await readBody(req);
-        const c = getCharById(b.character_id);
+        const c = await getCharById(b.character_id);
         if (!c || c.user_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
-        const existing = getReaction(postId, b.character_id);
-        if (existing) { removeReaction(postId, b.character_id); }
+        const existing = await getReaction(postId, b.character_id);
+        if (existing) { await removeReaction(postId, b.character_id); }
         else {
-          addReaction({ id: nanoid(), post_id: postId, character_id: b.character_id, created_at: now() });
-          const post = getPostById(postId);
+          await addReaction({ id: nanoid(), post_id: postId, character_id: b.character_id, created_at: now() });
+          const post = await getPostById(postId);
           if (post && post.user_id && post.user_id !== user.id) {
-            createNotif({ id: nanoid(), recipient_user_id: post.user_id, type: 'react', actor_character_id: b.character_id, post_id: postId, created_at: now() });
+            await createNotif({ id: nanoid(), recipient_user_id: post.user_id, type: 'react', actor_character_id: b.character_id, post_id: postId, created_at: now() });
             broadcast(post.user_id, { type: 'react', actor: c.name, postId });
           }
         }
-        return json(res, { ok: true, count: getReactionCount(postId), reacted: !existing });
+        return json(res, { ok: true, count: await getReactionCount(postId), reacted: !existing });
       }
 
       if (!sub && m === 'DELETE') {
         if (!user) return json(res, { error: 'Unauthorized' }, 401);
-        const post = getPostById(postId);
+        const post = await getPostById(postId);
         if (!post) return json(res, { error: 'Not found' }, 404);
-        const c = getCharById(post.character_id);
+        const c = await getCharById(post.character_id);
         if (!c || c.user_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
-        deletePost(postId);
+        await deletePost(postId);
         return json(res, { ok: true });
       }
     }
@@ -599,7 +599,7 @@ const server = http.createServer(async (req, res) => {
     // ── DM ──
     if (path === '/api/dm/rooms' && m === 'GET') {
       if (!user) return json(res, { error: 'Unauthorized' }, 401);
-      return json(res, { rooms: getRoomsByUser(user.id) });
+      return json(res, { rooms: await getRoomsByUser(user.id) });
     }
     if (path === '/api/dm/rooms' && m === 'POST') {
       if (!user) return json(res, { error: 'Unauthorized' }, 401);
@@ -607,16 +607,16 @@ const server = http.createServer(async (req, res) => {
       const { type, name, members, character_id, world_id } = b;
       if (!members || !members.length) return json(res, { error: 'members required' }, 400);
       if (type === 'dm' && members.length === 1) {
-        const existing = findDmRoom(user.id, members[0]);
-        if (existing) return json(res, { ok: true, room: { ...getRoomById(existing.id), members: getRoomMembers(existing.id) } });
+        const existing = await findDmRoom(user.id, members[0]);
+        if (existing) return json(res, { ok: true, room: { ...await getRoomById(existing.id), members: await getRoomMembers(existing.id) } });
       }
       const id = nanoid();
-      createRoom({ id, name: type === 'dm' ? '' : (name || '새 그룹'), type: type || 'dm', world_id: world_id || null, created_by: user.id, created_at: now() });
-      addRoomMember({ room_id: id, user_id: user.id, character_id: character_id || null, joined_at: now() });
+      await createRoom({ id, name: type === 'dm' ? '' : (name || '새 그룹'), type: type || 'dm', world_id: world_id || null, created_by: user.id, created_at: now() });
+      await addRoomMember({ room_id: id, user_id: user.id, character_id: character_id || null, joined_at: now() });
       for (const uid of members) {
-        if (uid !== user.id) addRoomMember({ room_id: id, user_id: uid, character_id: null, joined_at: now() });
+        if (uid !== user.id) await addRoomMember({ room_id: id, user_id: uid, character_id: null, joined_at: now() });
       }
-      return json(res, { ok: true, room: { ...getRoomById(id), members: getRoomMembers(id) } });
+      return json(res, { ok: true, room: { ...await getRoomById(id), members: await getRoomMembers(id) } });
     }
     if (path.startsWith('/api/dm/rooms/')) {
       const parts = path.slice('/api/dm/rooms/'.length).split('/');
@@ -624,28 +624,28 @@ const server = http.createServer(async (req, res) => {
       const sub = parts[1] || '';
       if (!sub && m === 'GET') {
         if (!user) return json(res, { error: 'Unauthorized' }, 401);
-        const room = getRoomById(roomId);
-        if (!room || !isRoomMember(roomId, user.id)) return json(res, { error: 'Forbidden' }, 403);
-        markDmRead(user.id, roomId);
-        return json(res, { room, messages: getDmMessages(roomId), members: getRoomMembers(roomId) });
+        const room = await getRoomById(roomId);
+        if (!room || !await isRoomMember(roomId, user.id)) return json(res, { error: 'Forbidden' }, 403);
+        await markDmRead(user.id, roomId);
+        return json(res, { room, messages: await getDmMessages(roomId), members: await getRoomMembers(roomId) });
       }
       if (sub === 'messages' && m === 'POST') {
         if (!user) return json(res, { error: 'Unauthorized' }, 401);
-        if (!isRoomMember(roomId, user.id)) return json(res, { error: 'Forbidden' }, 403);
+        if (!await isRoomMember(roomId, user.id)) return json(res, { error: 'Forbidden' }, 403);
         const b = await readBody(req);
         if (!b.content) return json(res, { error: 'content required' }, 400);
-        createDmMessage({ id: nanoid(), room_id: roomId, sender_user_id: user.id, character_id: b.character_id || null, content: b.content, created_at: now() });
-        markDmRead(user.id, roomId);
-        const members = getRoomMembers(roomId);
+        await createDmMessage({ id: nanoid(), room_id: roomId, sender_user_id: user.id, character_id: b.character_id || null, content: b.content, created_at: now() });
+        await markDmRead(user.id, roomId);
+        const members = await getRoomMembers(roomId);
         for (const mem of members) {
           if (mem.user_id !== user.id) broadcast(mem.user_id, { type: 'dm', roomId, senderId: user.id, content: b.content.slice(0, 60) });
         }
-        return json(res, { ok: true, messages: getDmMessages(roomId) });
+        return json(res, { ok: true, messages: await getDmMessages(roomId) });
       }
     }
     if (path === '/api/dm/unread' && m === 'GET') {
       if (!user) return json(res, { error: 'Unauthorized' }, 401);
-      return json(res, { count: getUnreadDmCount(user.id) });
+      return json(res, { count: await getUnreadDmCount(user.id) });
     }
 
     serveFile(res, join(__dirname, '../public/index.html'));
