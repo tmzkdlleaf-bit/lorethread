@@ -1,0 +1,669 @@
+{
+  "users": [
+    {
+      "id": "D1F98gu23zOyk2XvMYDN1",
+      "email": "tmzkdlleaf@gmail.com",
+      "password_hash": "$2a$10$kW7pDe/jS5pCUK2.RtaqmemgFgHN3zySSiGO8ruVqME/vkGq4.52y",
+      "display_name": "나비",
+      "role": "owner",
+      "theme": "light",
+      "created_at": "2026-05-25T18:45:57.135Z"
+    },
+    {
+      "id": "IrtTNMi8nJd1AXWdrB6dR",
+      "email": "tmzkdlleaf1@naver.com",
+      "password_hash": "$2a$10$AeepKrGZ5w6SWgnyohdIIO1abr3CMA5eTzoO6WHyyiokHm.4Tg3R2",
+      "display_name": "테스트",
+      "role": "member",
+      "theme": "light",
+      "created_at": "2026-05-26T19:00:12.956Z"
+    }
+  ],
+  "sessions": [
+    {
+      "id": "hSQY5ncdSI4ejAFpNyG2SBHaQuRy9kZm",
+      "user_id": "D1F98gu23zOyk2XvMYDN1",
+      "created_at": "2026-05-26T19:00:32.257Z"
+    },
+    {
+      "id": "AoS4vGE5ffsiBSpUXOjChG_kzvSeD9wo",
+      "user_id": "D1F98gu23zOyk2XvMYDN1",
+      "created_at": "2026-05-26T19:00:47.518Z"
+    },
+    {
+      "id": "iiLVluvy1FIH7z6BhJqD7QspF7jj-HPS",
+      "user_id": "IrtTNMi8nJd1AXWdrB6dR",
+      "created_at": "2026-05-27T03:34:34.644Z"
+    }
+  ],
+  "worlds": [
+    {
+      "id": "stoazQQY1RfxsLuQI29Tv",
+      "owner_id": "D1F98gu23zOyk2XvMYDN1",
+      "name": "테스트",
+      "slug": "테스트-iH6v",
+      "description": "테스트입니다",
+      "banner_color": "#7a8a99",
+      "icon_emoji": "🌍",
+      "announce_text": "공지공지",
+      "created_at": "2026-05-25T18:46:20.049Z",
+      "icon_image_url": "/uploads/91uOyt9T6__-1zsgClMo9.png",
+      "bg_image_url": "/uploads/UKHyPkt86-hXrJgQkteHo.png",
+      "banner_image_url": "/uploads/ZrnoSD-IdaOdp8Ta1KKiF.png",
+      "bg_overlay_opacity": 80
+    }
+  ],
+  "world_members": [
+    {
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "user_id": "D1F98gu23zOyk2XvMYDN1",
+      "joined_at": "2026-05-25T18:46:20.051Z"
+    },
+    {
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "user_id": "IrtTNMi8nJd1AXWdrB6dR",
+      "joined_at": "2026-05-27T02:00:23.496Z"
+    }
+  ],
+  "characters": [
+    {
+      "id": "xohQngHxYFqT4rBlMs5Hh",
+      "user_id": "D1F98gu23zOyk2XvMYDN1",
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "name": "가나다",
+      "handle": "ganada",
+      "role": "가나다",
+      "bio": "가나다",
+      "color_bg": "#E6F1FB",
+      "color_fg": "#ffffff",
+      "avatar_url": "",
+      "header_url": "",
+      "is_npc": 0,
+      "created_at": "2026-05-25T18:52:44.190Z"
+    },
+    {
+      "id": "WwYOoQMtrM4xyFmFkYfuY",
+      "user_id": "D1F98gu23zOyk2XvMYDN1",
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "name": "ㄹㅇㄴ",
+      "handle": "sss",
+      "role": "ㅇㅇㅇ",
+      "bio": "ㅇㄹㅇㄹ",
+      "color_bg": "#E6F1FB",
+      "color_fg": "#185FA5",
+      "avatar_url": "",
+      "header_url": "",
+      "is_npc": 0,
+      "created_at": "2026-05-26T07:41:06.959Z"
+    },
+    {
+      "id": "wIJZw3MNazFal6EvdMSW4",
+      "user_id": "IrtTNMi8nJd1AXWdrB6dR",
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "name": "테스트의 테스트",
+      "handle": "ttt",
+      "role": "",
+      "bio": "",
+      "color_bg": "#E6F1FB",
+      "color_fg": "#185FA5",
+      "avatar_url": "",
+      "header_url": "",
+      "is_npc": 0,
+      "created_at": "2026-05-27T02:00:45.113Z"
+    }
+  ],
+  "char_sections": [
+    {
+      "id": "5dnpofusmhkp1gp3c2uf5",
+      "character_id": "xohQngHxYFqT4rBlMs5Hh",
+      "title": "성격",
+      "content": "키워드 ",
+      "sort_order": 0
+    },
+    {
+      "id": "jsevko31gymcb1eidp5l",
+      "character_id": "xohQngHxYFqT4rBlMs5Hh",
+      "title": "기타",
+      "content": "ㅇㄹㅇㄹㅇㄹ",
+      "sort_order": 1
+    }
+  ],
+  "char_links": [],
+  "posts": [
+    {
+      "id": "GN9as-vT7TIlbM74jxFcv",
+      "character_id": "xohQngHxYFqT4rBlMs5Hh",
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "content": "*가나다* 가나다",
+      "reply_to_id": null,
+      "is_pinned": 0,
+      "created_at": "2026-05-25T18:53:02.685Z"
+    },
+    {
+      "id": "YnZ9mD3hjeRXFxNN-czWa",
+      "character_id": "xohQngHxYFqT4rBlMs5Hh",
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "content": "ㅇㄹㅇㄹㄹ",
+      "reply_to_id": "GN9as-vT7TIlbM74jxFcv",
+      "is_pinned": 0,
+      "created_at": "2026-05-25T18:53:07.249Z"
+    },
+    {
+      "id": "kP0BUBHSkSKS03r3yCz28",
+      "character_id": "xohQngHxYFqT4rBlMs5Hh",
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "content": "ㅇㄹㅇㄹㅇ",
+      "reply_to_id": "YnZ9mD3hjeRXFxNN-czWa",
+      "is_pinned": 0,
+      "created_at": "2026-05-25T18:53:19.466Z"
+    },
+    {
+      "id": "MHFvOBvbwBPH6OHFm0ne6",
+      "character_id": "xohQngHxYFqT4rBlMs5Hh",
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "content": "ㅇㄹㄹㅇ",
+      "reply_to_id": "GN9as-vT7TIlbM74jxFcv",
+      "is_pinned": 0,
+      "created_at": "2026-05-25T18:53:22.711Z"
+    },
+    {
+      "id": "ap0cg8dzc5Nj6h9-SKihK",
+      "character_id": "xohQngHxYFqT4rBlMs5Hh",
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "content": "ㄹㅇㄹㅇㄹ",
+      "reply_to_id": "GN9as-vT7TIlbM74jxFcv",
+      "is_pinned": 0,
+      "created_at": "2026-05-25T18:53:26.845Z"
+    },
+    {
+      "id": "avk5HR30SfWBBh8zlyNbZ",
+      "character_id": "xohQngHxYFqT4rBlMs5Hh",
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "content": "ㄹㅇㄹㅇㄹ",
+      "reply_to_id": "GN9as-vT7TIlbM74jxFcv",
+      "is_pinned": 0,
+      "created_at": "2026-05-25T18:53:28.881Z"
+    },
+    {
+      "id": "CGBARSjs4BWL-v6h27Tlc",
+      "character_id": "xohQngHxYFqT4rBlMs5Hh",
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "content": "ㄹㅇㄹㅇ",
+      "reply_to_id": null,
+      "is_pinned": 1,
+      "created_at": "2026-05-25T18:56:35.852Z",
+      "edited_at": "2026-05-26T18:37:53.212Z"
+    },
+    {
+      "id": "NoMD28A3qQi8tByC04oQi",
+      "character_id": "xohQngHxYFqT4rBlMs5Hh",
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "content": "ㄹㅎ",
+      "reply_to_id": "YnZ9mD3hjeRXFxNN-czWa",
+      "is_pinned": 0,
+      "created_at": "2026-05-26T02:33:30.994Z"
+    },
+    {
+      "id": "1p21eUHe2Qyk8aubZeZZR",
+      "character_id": "xohQngHxYFqT4rBlMs5Hh",
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "content": "ㅇㄹㅇㄹㅇ",
+      "reply_to_id": "CGBARSjs4BWL-v6h27Tlc",
+      "is_pinned": 0,
+      "created_at": "2026-05-26T07:43:25.036Z"
+    },
+    {
+      "id": "ThMHQ4xj7FLyLvYwB1wLi",
+      "character_id": "xohQngHxYFqT4rBlMs5Hh",
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "content": "ㅇㅇㅇ##dddㅇㄹㅇㄹㅇ",
+      "reply_to_id": null,
+      "is_pinned": 0,
+      "created_at": "2026-05-26T17:00:50.500Z",
+      "edited_at": "2026-05-27T02:08:52.028Z"
+    },
+    {
+      "id": "n2WLyw5MsZHAAaiK3Qiph",
+      "character_id": "xohQngHxYFqT4rBlMs5Hh",
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "content": "ㅇㄹㅇㄹ",
+      "reply_to_id": null,
+      "is_pinned": 0,
+      "created_at": "2026-05-26T17:01:00.932Z",
+      "edited_at": "2026-05-26T18:33:44.791Z"
+    },
+    {
+      "id": "pwNJkfugnIR2DMQ6A04rZ",
+      "character_id": "xohQngHxYFqT4rBlMs5Hh",
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "content": "",
+      "reply_to_id": null,
+      "is_pinned": 1,
+      "created_at": "2026-05-26T17:01:17.945Z",
+      "edited_at": "2026-05-26T18:17:47.012Z"
+    },
+    {
+      "id": "lXiUdb-cC-ldxxItEx938",
+      "character_id": "xohQngHxYFqT4rBlMs5Hh",
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "content": "ㅇㅇㅇㅇ",
+      "reply_to_id": "ap0cg8dzc5Nj6h9-SKihK",
+      "is_pinned": 0,
+      "created_at": "2026-05-26T18:37:34.093Z"
+    },
+    {
+      "id": "tn-yTiybwmWf0w8k7tbIC",
+      "character_id": "xohQngHxYFqT4rBlMs5Hh",
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "content": "",
+      "reply_to_id": null,
+      "is_pinned": 0,
+      "created_at": "2026-05-26T18:51:59.089Z"
+    },
+    {
+      "id": "r8rxaQwCrZyuzbIQbeQuZ",
+      "character_id": "wIJZw3MNazFal6EvdMSW4",
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "content": "답글답글",
+      "reply_to_id": "pwNJkfugnIR2DMQ6A04rZ",
+      "is_pinned": 0,
+      "created_at": "2026-05-27T02:06:57.095Z"
+    },
+    {
+      "id": "f0n3RT8Mmjvk48n_47OHj",
+      "character_id": "xohQngHxYFqT4rBlMs5Hh",
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "content": "테스트 테스트",
+      "reply_to_id": null,
+      "is_pinned": 0,
+      "created_at": "2026-05-27T02:19:19.922Z"
+    },
+    {
+      "id": "W8iGRObVMa9fNqKoW--Ho",
+      "character_id": "wIJZw3MNazFal6EvdMSW4",
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "content": "테테테스트",
+      "reply_to_id": null,
+      "is_pinned": 0,
+      "created_at": "2026-05-27T02:22:00.914Z"
+    },
+    {
+      "id": "irv07fmisJDB9G2aG8NcT",
+      "character_id": "wIJZw3MNazFal6EvdMSW4",
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "content": "테스트용 답글",
+      "reply_to_id": "f0n3RT8Mmjvk48n_47OHj",
+      "is_pinned": 0,
+      "created_at": "2026-05-27T02:22:18.880Z"
+    },
+    {
+      "id": "tRDUFiVJgKJ05BBamAORj",
+      "character_id": "xohQngHxYFqT4rBlMs5Hh",
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "content": "에ㅔㅔ에에",
+      "reply_to_id": "W8iGRObVMa9fNqKoW--Ho",
+      "is_pinned": 0,
+      "created_at": "2026-05-27T02:30:56.826Z"
+    },
+    {
+      "id": "p8OapRPPywu-rNmhZZFRd",
+      "character_id": "xohQngHxYFqT4rBlMs5Hh",
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "content": "#가나다라",
+      "reply_to_id": null,
+      "is_pinned": 0,
+      "created_at": "2026-05-27T03:27:57.920Z"
+    },
+    {
+      "id": "F1LGTzXaTpsC-8HmFcMeF",
+      "character_id": "xohQngHxYFqT4rBlMs5Hh",
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "content": "@ttt ㅇㅇㅇㅇ",
+      "reply_to_id": null,
+      "is_pinned": 0,
+      "created_at": "2026-05-27T03:28:27.585Z"
+    }
+  ],
+  "post_media": [
+    {
+      "id": "SfUpTrp583ruaC8-G7W5y",
+      "post_id": "n2WLyw5MsZHAAaiK3Qiph",
+      "url": "/uploads/giuag0X00C-zG6NBo1Mep.png",
+      "media_type": "image",
+      "sort_order": 0
+    },
+    {
+      "id": "6UcTN5TnmKYvSdiHWS1De",
+      "post_id": "pwNJkfugnIR2DMQ6A04rZ",
+      "url": "/uploads/qutQuymwboAr1UOsNDlMR.png",
+      "media_type": "image",
+      "sort_order": 0
+    },
+    {
+      "id": "3MZ2YKP0b5WStDcYZOvY8",
+      "post_id": "pwNJkfugnIR2DMQ6A04rZ",
+      "url": "/uploads/-YI8t8kNdQwf3QXfvZdKc.png",
+      "media_type": "image",
+      "sort_order": 1
+    },
+    {
+      "id": "nJO8kYodLL7OBa3c4qIYt",
+      "post_id": "pwNJkfugnIR2DMQ6A04rZ",
+      "url": "/uploads/K2l0DJILkV0e-MJX6PhzR.png",
+      "media_type": "image",
+      "sort_order": 2
+    },
+    {
+      "id": "THAOOROeg7Oyk1c8Zuwwo",
+      "post_id": "pwNJkfugnIR2DMQ6A04rZ",
+      "url": "/uploads/wbYdvHW99V0X6a9ZcG_zK.png",
+      "media_type": "image",
+      "sort_order": 3
+    },
+    {
+      "id": "lGuBpSOL-p11HALqubMPj",
+      "post_id": "tn-yTiybwmWf0w8k7tbIC",
+      "url": "/uploads/Vs9BpCu3AEfN5876CHNXY.png",
+      "media_type": "image",
+      "sort_order": 0
+    },
+    {
+      "id": "N9dgX4heWOxKvx5ZuMMXu",
+      "post_id": "tn-yTiybwmWf0w8k7tbIC",
+      "url": "/uploads/vUo6yrRvyUFg26FtTE7_0.png",
+      "media_type": "image",
+      "sort_order": 1
+    },
+    {
+      "id": "NCmlYBjasMhEHQiBjB4yu",
+      "post_id": "tn-yTiybwmWf0w8k7tbIC",
+      "url": "/uploads/IXpGDx6jpz5Q0vjuJcaoo.png",
+      "media_type": "image",
+      "sort_order": 2
+    }
+  ],
+  "reactions": [
+    {
+      "id": "5fVHTJX21tS_7zQo7smne",
+      "post_id": "LEyJp-fsG--G7cJI23jdX",
+      "character_id": "WwYOoQMtrM4xyFmFkYfuY",
+      "created_at": "2026-05-26T12:27:06.627Z"
+    },
+    {
+      "id": "Nt-lwPtG7mCOPelb2Ikb3",
+      "post_id": "LEyJp-fsG--G7cJI23jdX",
+      "character_id": "xohQngHxYFqT4rBlMs5Hh",
+      "created_at": "2026-05-26T14:23:13.210Z"
+    },
+    {
+      "id": "8k8eSb9ddeSE2YbiLy85b",
+      "post_id": "pwNJkfugnIR2DMQ6A04rZ",
+      "character_id": "xohQngHxYFqT4rBlMs5Hh",
+      "created_at": "2026-05-26T19:12:21.294Z"
+    },
+    {
+      "id": "1n_3n6jqWJWbPer7sKBFm",
+      "post_id": "tn-yTiybwmWf0w8k7tbIC",
+      "character_id": "wIJZw3MNazFal6EvdMSW4",
+      "created_at": "2026-05-27T02:00:48.543Z"
+    },
+    {
+      "id": "Ra5yp1rYvn6ENh2pSeK2a",
+      "post_id": "pwNJkfugnIR2DMQ6A04rZ",
+      "character_id": "wIJZw3MNazFal6EvdMSW4",
+      "created_at": "2026-05-27T02:06:14.805Z"
+    },
+    {
+      "id": "Rej7P2ivgr_qIsaUldcKN",
+      "post_id": "n2WLyw5MsZHAAaiK3Qiph",
+      "character_id": "wIJZw3MNazFal6EvdMSW4",
+      "created_at": "2026-05-27T02:06:15.965Z"
+    },
+    {
+      "id": "vjBsIqaionpgLSZLBSBbf",
+      "post_id": "ThMHQ4xj7FLyLvYwB1wLi",
+      "character_id": "wIJZw3MNazFal6EvdMSW4",
+      "created_at": "2026-05-27T02:06:17.067Z"
+    },
+    {
+      "id": "1a-CYfS3bRUpMr7Tr8x2l",
+      "post_id": "CGBARSjs4BWL-v6h27Tlc",
+      "character_id": "wIJZw3MNazFal6EvdMSW4",
+      "created_at": "2026-05-27T02:06:17.741Z"
+    },
+    {
+      "id": "a4NHKcnec_SGXdDLMxJ8L",
+      "post_id": "GN9as-vT7TIlbM74jxFcv",
+      "character_id": "wIJZw3MNazFal6EvdMSW4",
+      "created_at": "2026-05-27T02:06:18.374Z"
+    },
+    {
+      "id": "pbT0LEaQqqg8S2nX8Qiw2",
+      "post_id": "f0n3RT8Mmjvk48n_47OHj",
+      "character_id": "wIJZw3MNazFal6EvdMSW4",
+      "created_at": "2026-05-27T02:21:56.055Z"
+    },
+    {
+      "id": "IXtRkco2M-90z9B1mbod2",
+      "post_id": "W8iGRObVMa9fNqKoW--Ho",
+      "character_id": "xohQngHxYFqT4rBlMs5Hh",
+      "created_at": "2026-05-27T02:31:12.151Z"
+    }
+  ],
+  "notifications": [
+    {
+      "id": "k_9ViNiL2Pp1-pX-BHUon",
+      "recipient_user_id": "D1F98gu23zOyk2XvMYDN1",
+      "type": "react",
+      "actor_character_id": "wIJZw3MNazFal6EvdMSW4",
+      "post_id": "pwNJkfugnIR2DMQ6A04rZ",
+      "is_read": true,
+      "created_at": "2026-05-27T02:06:14.807Z"
+    },
+    {
+      "id": "8JAw8a82BReNs7PswpQox",
+      "recipient_user_id": "D1F98gu23zOyk2XvMYDN1",
+      "type": "react",
+      "actor_character_id": "wIJZw3MNazFal6EvdMSW4",
+      "post_id": "n2WLyw5MsZHAAaiK3Qiph",
+      "is_read": true,
+      "created_at": "2026-05-27T02:06:15.966Z"
+    },
+    {
+      "id": "keKGy_Vg96Bo4ZMhPtju5",
+      "recipient_user_id": "D1F98gu23zOyk2XvMYDN1",
+      "type": "react",
+      "actor_character_id": "wIJZw3MNazFal6EvdMSW4",
+      "post_id": "ThMHQ4xj7FLyLvYwB1wLi",
+      "is_read": true,
+      "created_at": "2026-05-27T02:06:17.068Z"
+    },
+    {
+      "id": "DULbn-nwOaQ2LevX9DICt",
+      "recipient_user_id": "D1F98gu23zOyk2XvMYDN1",
+      "type": "react",
+      "actor_character_id": "wIJZw3MNazFal6EvdMSW4",
+      "post_id": "CGBARSjs4BWL-v6h27Tlc",
+      "is_read": true,
+      "created_at": "2026-05-27T02:06:17.743Z"
+    },
+    {
+      "id": "yyNV1UpU1p2za5Nmo9MHK",
+      "recipient_user_id": "D1F98gu23zOyk2XvMYDN1",
+      "type": "react",
+      "actor_character_id": "wIJZw3MNazFal6EvdMSW4",
+      "post_id": "GN9as-vT7TIlbM74jxFcv",
+      "is_read": true,
+      "created_at": "2026-05-27T02:06:18.376Z"
+    },
+    {
+      "id": "p889eM0u0Pc1QpPPsY6TL",
+      "recipient_user_id": "D1F98gu23zOyk2XvMYDN1",
+      "type": "reply",
+      "actor_character_id": "wIJZw3MNazFal6EvdMSW4",
+      "post_id": "r8rxaQwCrZyuzbIQbeQuZ",
+      "is_read": true,
+      "created_at": "2026-05-27T02:06:57.096Z"
+    },
+    {
+      "id": "qWyJ6HPV6iAIcpxkmWEiY",
+      "recipient_user_id": "D1F98gu23zOyk2XvMYDN1",
+      "type": "react",
+      "actor_character_id": "wIJZw3MNazFal6EvdMSW4",
+      "post_id": "f0n3RT8Mmjvk48n_47OHj",
+      "is_read": true,
+      "created_at": "2026-05-27T02:21:56.057Z"
+    },
+    {
+      "id": "_w7UTNobty9_B1w6bhkgt",
+      "recipient_user_id": "D1F98gu23zOyk2XvMYDN1",
+      "type": "reply",
+      "actor_character_id": "wIJZw3MNazFal6EvdMSW4",
+      "post_id": "irv07fmisJDB9G2aG8NcT",
+      "is_read": true,
+      "created_at": "2026-05-27T02:22:18.882Z"
+    },
+    {
+      "id": "Y8kgh6RyDeDDIxk3WiuRL",
+      "recipient_user_id": "IrtTNMi8nJd1AXWdrB6dR",
+      "type": "reply",
+      "actor_character_id": "xohQngHxYFqT4rBlMs5Hh",
+      "post_id": "tRDUFiVJgKJ05BBamAORj",
+      "is_read": true,
+      "created_at": "2026-05-27T02:30:56.829Z"
+    },
+    {
+      "id": "ioWCKrsqa5qvAzyhwRHsy",
+      "recipient_user_id": "IrtTNMi8nJd1AXWdrB6dR",
+      "type": "react",
+      "actor_character_id": "xohQngHxYFqT4rBlMs5Hh",
+      "post_id": "W8iGRObVMa9fNqKoW--Ho",
+      "is_read": true,
+      "created_at": "2026-05-27T02:31:12.153Z"
+    },
+    {
+      "id": "MsQEE3yJhLYis56Mvkn7S",
+      "recipient_user_id": "IrtTNMi8nJd1AXWdrB6dR",
+      "type": "mention",
+      "actor_character_id": "xohQngHxYFqT4rBlMs5Hh",
+      "post_id": "F1LGTzXaTpsC-8HmFcMeF",
+      "is_read": true,
+      "created_at": "2026-05-27T03:28:27.586Z"
+    }
+  ],
+  "follows": [
+    {
+      "id": "8Nh1L9L1Zzibo3eswPp_4",
+      "follower_character_id": "xohQngHxYFqT4rBlMs5Hh",
+      "following_character_id": "wIJZw3MNazFal6EvdMSW4",
+      "created_at": "2026-05-27T03:10:10.869Z"
+    }
+  ],
+  "announcements": [
+    {
+      "id": "Os82rCpDYbthqGfI0BJjr",
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "title": "공지입니다",
+      "content": "공지공지",
+      "author_id": "D1F98gu23zOyk2XvMYDN1",
+      "created_at": "2026-05-26T17:49:20.979Z"
+    },
+    {
+      "id": "6dT_ybfmfY4Y9qd4XQcTF",
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "title": "ㄹㄹㄹㄹ",
+      "content": "ㄹㄹ",
+      "author_id": "D1F98gu23zOyk2XvMYDN1",
+      "created_at": "2026-05-26T18:20:59.593Z"
+    },
+    {
+      "id": "_B3DjBoKqEB7jlZw1EGoa",
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "title": "라랄랄",
+      "content": "ㅇㅇ",
+      "author_id": "D1F98gu23zOyk2XvMYDN1",
+      "created_at": "2026-05-26T18:32:52.756Z"
+    }
+  ],
+  "events": [
+    {
+      "id": "tFKcM5T-YGN5PTMe0-kkn",
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "title": "이벤트",
+      "content": "이벤트입니다",
+      "start_date": "2026-05-26",
+      "end_date": "2026-05-30",
+      "color": "#f5a623",
+      "created_at": "2026-05-26T17:49:10.275Z"
+    }
+  ],
+  "invites": [
+    {
+      "code": "2eeZUYQja3",
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "created_by": "D1F98gu23zOyk2XvMYDN1",
+      "created_at": "2026-05-27T01:44:42.723Z",
+      "used": false
+    }
+  ],
+  "dm_rooms": [
+    {
+      "id": "1rhdqC4AWuri-E7_RR-Cx",
+      "name": "xptmxm",
+      "type": "group",
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "created_by": "IrtTNMi8nJd1AXWdrB6dR",
+      "created_at": "2026-05-27T02:33:44.654Z"
+    },
+    {
+      "id": "7sszEYJ1PDlxGe8T6dDzD",
+      "name": "ㅇㅇㅇ",
+      "type": "group",
+      "world_id": "stoazQQY1RfxsLuQI29Tv",
+      "created_by": "IrtTNMi8nJd1AXWdrB6dR",
+      "created_at": "2026-05-27T02:43:26.375Z"
+    }
+  ],
+  "dm_room_members": [
+    {
+      "room_id": "1rhdqC4AWuri-E7_RR-Cx",
+      "user_id": "IrtTNMi8nJd1AXWdrB6dR",
+      "character_id": null,
+      "joined_at": "2026-05-27T02:33:44.655Z"
+    },
+    {
+      "room_id": "1rhdqC4AWuri-E7_RR-Cx",
+      "user_id": "D1F98gu23zOyk2XvMYDN1",
+      "character_id": null,
+      "joined_at": "2026-05-27T02:33:44.657Z"
+    },
+    {
+      "room_id": "7sszEYJ1PDlxGe8T6dDzD",
+      "user_id": "IrtTNMi8nJd1AXWdrB6dR",
+      "character_id": null,
+      "joined_at": "2026-05-27T02:43:26.376Z"
+    },
+    {
+      "room_id": "7sszEYJ1PDlxGe8T6dDzD",
+      "user_id": "D1F98gu23zOyk2XvMYDN1",
+      "character_id": null,
+      "joined_at": "2026-05-27T02:43:26.378Z"
+    }
+  ],
+  "dm_reads": {
+    "IrtTNMi8nJd1AXWdrB6dR:1rhdqC4AWuri-E7_RR-Cx": "2026-05-27T06:06:12.825Z",
+    "IrtTNMi8nJd1AXWdrB6dR:7sszEYJ1PDlxGe8T6dDzD": "2026-05-27T02:45:32.612Z",
+    "D1F98gu23zOyk2XvMYDN1:7sszEYJ1PDlxGe8T6dDzD": "2026-05-27T03:02:01.641Z",
+    "D1F98gu23zOyk2XvMYDN1:1rhdqC4AWuri-E7_RR-Cx": "2026-05-27T03:34:22.352Z"
+  },
+  "dm_messages": [
+    {
+      "id": "wXBAIF3tIjIGzN3MWKbmD",
+      "room_id": "7sszEYJ1PDlxGe8T6dDzD",
+      "sender_user_id": "IrtTNMi8nJd1AXWdrB6dR",
+      "character_id": "wIJZw3MNazFal6EvdMSW4",
+      "content": "ㅇㅇㅇㅇ",
+      "created_at": "2026-05-27T02:43:29.364Z"
+    }
+  ]
+}
