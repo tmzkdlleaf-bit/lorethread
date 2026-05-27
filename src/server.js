@@ -434,8 +434,13 @@ const server = http.createServer(async (req, res) => {
           const qs = new URL(req.url, `http://localhost:${PORT}`).searchParams;
           const offset = parseInt(qs.get('offset') || '0');
           const tag = qs.get('tag') || '';
-          const myCharIds = user ? await getCharsByUser(user.id, world.id).map(c => c.id) : [];
-          let posts = await getPostsByWorld(world.id, 30, offset).map(p => ({ ...p, userReacted: myCharIds.some(cid => !!await getReaction(p.id, cid)) }));
+          const _myChars2 = user ? await getCharsByUser(user.id, world.id) : [];
+          const myCharIds = _myChars2.map(c => c.id);
+          const _rawPosts = await getPostsByWorld(world.id, 30, offset);
+          let posts = await Promise.all(_rawPosts.map(async p => ({
+            ...p,
+            userReacted: (await Promise.all(myCharIds.map(cid => getReaction(p.id, cid)))).some(Boolean)
+          })));
           if (tag) posts = posts.filter(p => p.content?.toLowerCase().includes('#' + tag.toLowerCase()));
           return json(res, { posts });
         }
