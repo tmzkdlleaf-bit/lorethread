@@ -1581,9 +1581,12 @@ async function doLogin() {
   const pw = document.getElementById('login-pw').value;
   const err = document.getElementById('login-err');
   err.style.display = 'none';
-  const res = await api('POST', '/api/auth/login', { email, password: pw });
-  if (res.error) { err.textContent = res.error; err.style.display = 'block'; return; }
-  await initApp();
+  const btn = document.querySelector('#auth-login-form .btn-primary');
+  await withLoading(btn, async () => {
+    const res = await api('POST', '/api/auth/login', { email, password: pw });
+    if (res.error) { err.textContent = res.error; err.style.display = 'block'; return; }
+    await initApp();
+  });
 }
 
 async function doRegister() {
@@ -1593,9 +1596,12 @@ async function doRegister() {
   const err = document.getElementById('reg-err');
   err.style.display = 'none';
   if (pw.length < 6) { err.textContent = '비밀번호는 6자 이상이어야 합니다.'; err.style.display = 'block'; return; }
-  const res = await api('POST', '/api/auth/register', { email, password: pw, display_name: name });
-  if (res.error) { err.textContent = res.error; err.style.display = 'block'; return; }
-  await initApp();
+  const btn = document.querySelector('#auth-register-form .btn-primary');
+  await withLoading(btn, async () => {
+    const res = await api('POST', '/api/auth/register', { email, password: pw, display_name: name });
+    if (res.error) { err.textContent = res.error; err.style.display = 'block'; return; }
+    await initApp();
+  });
 }
 
 async function doLogout() {
@@ -2280,21 +2286,48 @@ function handlePostClick(e, postId) {
   openThreadView(postId);
 }
 
+// ─── 버튼 로딩 유틸 ───
+// 클릭 중 중복 제출 방지 + 로딩 스피너
+function withLoading(btn, fn) {
+  if (!btn || btn.disabled) return;
+  const orig = btn.innerHTML;
+  const origW = btn.offsetWidth;
+  btn.disabled = true;
+  btn.style.minWidth = origW + 'px';
+  btn.innerHTML = '<i class="ti ti-loader-2" style="animation:spin .7s linear infinite;display:inline-block"></i>';
+  return Promise.resolve().then(fn).finally(() => {
+    btn.disabled = false;
+    btn.innerHTML = orig;
+    btn.style.minWidth = '';
+  });
+}
+
+// 단순 중복 방지 플래그 (버튼 없는 경우용)
+const _submitting = new Set();
+function once(key, fn) {
+  if (_submitting.has(key)) return;
+  _submitting.add(key);
+  return Promise.resolve().then(fn).finally(() => _submitting.delete(key));
+}
+
 async function submitPost() {
   const ta = document.getElementById('compose-ta');
   const content = ta.value.trim();
   if (!content && pendingMediaUrls.length === 0) return;
   if (!selectedCharId) { toast('캐릭터를 선택해주세요.'); return; }
-  const res = await api('POST', `/api/worlds/${encodeURIComponent(currentWorld.slug)}/posts`, {
-    content, character_id: selectedCharId, media_urls: pendingMediaUrls
+  const btn = document.querySelector('.compose-footer .btn-primary');
+  await withLoading(btn, async () => {
+    const res = await api('POST', `/api/worlds/${encodeURIComponent(currentWorld.slug)}/posts`, {
+      content, character_id: selectedCharId, media_urls: pendingMediaUrls
+    });
+    if (res.error) { toast(res.error); return; }
+    ta.value = ''; ta.style.height = 'auto';
+    pendingMediaUrls = [];
+    document.getElementById('media-preview-area').innerHTML = '';
+    feedPosts.unshift(res.post);
+    renderFeed();
+    toast('포스트가 등록됐습니다');
   });
-  if (res.error) { toast(res.error); return; }
-  ta.value = ''; ta.style.height = 'auto';
-  pendingMediaUrls = [];
-  document.getElementById('media-preview-area').innerHTML = '';
-  feedPosts.unshift(res.post);
-  renderFeed();
-  toast('포스트가 등록됐습니다');
 }
 
 async function submitReply(e, postId) {
@@ -2303,38 +2336,55 @@ async function submitReply(e, postId) {
   const content = ta?.value.trim();
   if (!content) return;
   if (!selectedCharId) { toast('캐릭터를 선택해주세요.'); return; }
-  const res = await api('POST', `/api/worlds/${encodeURIComponent(currentWorld.slug)}/posts`, {
-    content, character_id: selectedCharId, reply_to_id: postId
+  const btn = e.target.closest('button') || e.currentTarget;
+  await withLoading(btn, async () => {
+    const res = await api('POST', `/api/worlds/${encodeURIComponent(currentWorld.slug)}/posts`, {
+      content, character_id: selectedCharId, reply_to_id: postId
+    });
+    if (res.error) { toast(res.error); return; }
+    document.getElementById('reply-compose-' + postId)?.remove();
+    const post = feedPosts.find(p => p.id === postId);
+    if (post) { post.replies = (post.replies || 0) + 1; }
+    const btn2 = document.querySelector(`#post-${postId} .pact`);
+    if (btn2 && btn2.querySelector('.ti-messages')) btn2.innerHTML = `<i class="ti ti-messages"></i> ${post?.replies || 0}`;
+    const container = document.getElementById('replies-' + postId);
+    if (container.classList.contains('open')) {
+      const rRes = await api('GET', `/api/posts/${postId}/replies`);
+      container.innerHTML = (rRes.replies || []).map(r => renderPost(r, true)).join('');
+    }
+    toast('답글이 등록됐습니다');
   });
-  if (res.error) { toast(res.error); return; }
-  // 작성 폼 닫기
-  document.getElementById('reply-compose-' + postId)?.remove();
-  // 카운트 업데이트
-  const post = feedPosts.find(p => p.id === postId);
-  if (post) { post.replies = (post.replies || 0) + 1; }
-  const btn = document.querySelector(`#post-${postId} .pact`);
-  if (btn && btn.querySelector('.ti-messages')) btn.innerHTML = `<i class="ti ti-messages"></i> ${post?.replies || 0}`;
-  // 이미 열려있으면 갱신
-  const container = document.getElementById('replies-' + postId);
-  if (container.classList.contains('open')) {
-    const rRes = await api('GET', `/api/posts/${postId}/replies`);
-    container.innerHTML = (rRes.replies || []).map(r => renderPost(r, true)).join('');
-  }
-  toast('답글이 등록됐습니다');
 }
 
 async function toggleReact(e, postId, charId) {
   e.stopPropagation();
   if (!selectedCharId) return;
-  const res = await api('POST', `/api/posts/${postId}/react`, { character_id: selectedCharId });
-  if (res.error) return;
-  document.getElementById('react-count-' + postId).textContent = res.count;
   const btn = document.getElementById('react-' + postId);
-  btn.classList.toggle('liked', res.reacted);
-  const icon = document.getElementById('react-icon-' + postId);
-  if (icon) icon.className = res.reacted ? 'ti ti-heart-filled' : 'ti ti-heart';
+  if (!btn || btn.disabled) return;
+  // 낙관적 업데이트 — 서버 응답 전에 즉시 반영
   const post = feedPosts.find(p => p.id === postId);
-  if (post) { post.reactions = res.count; post.userReacted = res.reacted; }
+  const willReact = !btn.classList.contains('liked');
+  btn.classList.toggle('liked', willReact);
+  const icon = document.getElementById('react-icon-' + postId);
+  if (icon) icon.className = willReact ? 'ti ti-heart-filled' : 'ti ti-heart';
+  const countEl = document.getElementById('react-count-' + postId);
+  const curCount = parseInt(countEl.textContent) || 0;
+  countEl.textContent = willReact ? curCount + 1 : Math.max(0, curCount - 1);
+  btn.disabled = true;
+  try {
+    const res = await api('POST', `/api/posts/${postId}/react`, { character_id: selectedCharId });
+    if (res.error) {
+      // 실패 시 롤백
+      btn.classList.toggle('liked', !willReact);
+      if (icon) icon.className = !willReact ? 'ti ti-heart-filled' : 'ti ti-heart';
+      countEl.textContent = curCount;
+    } else {
+      countEl.textContent = res.count;
+      if (post) { post.reactions = res.count; post.userReacted = res.reacted; }
+    }
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 async function deletePost(e, postId) {
@@ -2656,20 +2706,21 @@ async function saveCharacter() {
     is_npc: document.getElementById('char-npc').checked,
     sections: charSections, links: charLinks
   };
-
-  let res;
-  if (editingCharId) {
-    res = await api('PATCH', `/api/characters/${editingCharId}`, data);
-  } else {
-    data.handle = handle;
-    res = await api('POST', `/api/worlds/${currentWorld.slug}/characters`, data);
-  }
-  if (res.error) { err.textContent = res.error; err.style.display = 'block'; return; }
-
-  closeModal('new-char-modal');
-  await loadWorldData();
-  renderCharsGrid();
-  toast(editingCharId ? '캐릭터가 수정됐습니다' : '캐릭터가 등록됐습니다');
+  const btn = document.querySelector('#new-char-modal .btn-primary');
+  await withLoading(btn, async () => {
+    let res;
+    if (editingCharId) {
+      res = await api('PATCH', `/api/characters/${editingCharId}`, data);
+    } else {
+      data.handle = handle;
+      res = await api('POST', `/api/worlds/${currentWorld.slug}/characters`, data);
+    }
+    if (res.error) { err.textContent = res.error; err.style.display = 'block'; return; }
+    closeModal('new-char-modal');
+    await loadWorldData();
+    renderCharsGrid();
+    toast(editingCharId ? '캐릭터가 수정됐습니다' : '캐릭터가 등록됐습니다');
+  });
 }
 
 // ─── Char editor modal functions ───
@@ -3094,43 +3145,45 @@ function selCFg(el) {
 }
 
 async function saveCustPanel() {
-  const res = await api('PATCH', `/api/worlds/${encodeURIComponent(currentWorld.slug)}`, {
-    name: document.getElementById('cp-name').value.trim(),
-    icon_emoji: document.getElementById('cp-emoji').value,
-    banner_color: cpColor || currentWorld.banner_color,
-    description: document.getElementById('cp-desc').value.trim(),
-    announce_text: document.getElementById('cp-announce').value.trim(),
-    bg_image_url: currentWorld.bg_image_url || '',
-    banner_image_url: currentWorld.banner_image_url || '',
-    bg_overlay_opacity: parseInt(document.getElementById('cp-ov')?.value || '40'),
-    custom_font: document.getElementById('cp-font')?.value || '',
-    card_style: _cardStyle || 'default',
-    banner_align: document.getElementById('cp-banner-align')?.value || 'left',
+  const btn = document.querySelector('.cust-save .btn-primary');
+  await withLoading(btn, async () => {
+    const res = await api('PATCH', `/api/worlds/${encodeURIComponent(currentWorld.slug)}`, {
+      name: document.getElementById('cp-name').value.trim(),
+      icon_emoji: document.getElementById('cp-emoji').value,
+      banner_color: cpColor || currentWorld.banner_color,
+      description: document.getElementById('cp-desc').value.trim(),
+      announce_text: document.getElementById('cp-announce').value.trim(),
+      bg_image_url: currentWorld.bg_image_url || '',
+      banner_image_url: currentWorld.banner_image_url || '',
+      bg_overlay_opacity: parseInt(document.getElementById('cp-ov')?.value || '40'),
+      custom_font: document.getElementById('cp-font')?.value || '',
+      card_style: _cardStyle || 'default',
+      banner_align: document.getElementById('cp-banner-align')?.value || 'left',
+    });
+    if (res.world) {
+      currentWorld = res.world;
+      const idx = appWorlds.findIndex(w => w.id === currentWorld.id);
+      if (idx >= 0) appWorlds[idx] = currentWorld;
+      applyWorldTheme(currentWorld);
+      renderWorldTabs();
+      renderWorldBanner();
+      const rcb = document.getElementById('rcard-banner');
+      if (rcb) {
+        rcb.style.background = currentWorld.banner_color || '#185FA5';
+        if (currentWorld.banner_image_url) { rcb.style.backgroundImage = `url(${currentWorld.banner_image_url})`; rcb.style.backgroundSize = 'cover'; rcb.style.backgroundPosition = 'center'; }
+        else rcb.style.backgroundImage = '';
+      }
+      const re = document.getElementById('rcard-emoji');
+      if (re) {
+        if (currentWorld.icon_image_url) re.innerHTML = `<img src="${currentWorld.icon_image_url}" style="width:32px;height:32px;border-radius:6px;object-fit:cover;border:2px solid rgba(255,255,255,0.3)" alt="">`;
+        else re.innerHTML = currentWorld.icon_emoji || '<i class="ti ti-world" style="font-size:24px;color:rgba(255,255,255,0.9)"></i>';
+      }
+      const rn = document.getElementById('rcard-name'); if (rn) rn.textContent = currentWorld.name;
+      const rd = document.getElementById('rside-desc'); if (rd) rd.textContent = currentWorld.description || '';
+    }
+    closeCustPanel();
+    toast('저장됐습니다');
   });
-  if (res.world) {
-    currentWorld = res.world;
-    const idx = appWorlds.findIndex(w => w.id === currentWorld.id);
-    if (idx >= 0) appWorlds[idx] = currentWorld;
-    applyWorldTheme(currentWorld);
-    renderWorldTabs();
-    renderWorldBanner();
-    // 우측 패널 즉시 반영
-    const rcb = document.getElementById('rcard-banner');
-    if (rcb) {
-      rcb.style.background = currentWorld.banner_color || '#185FA5';
-      if (currentWorld.banner_image_url) { rcb.style.backgroundImage = `url(${currentWorld.banner_image_url})`; rcb.style.backgroundSize = 'cover'; rcb.style.backgroundPosition = 'center'; }
-      else rcb.style.backgroundImage = '';
-    }
-    const re = document.getElementById('rcard-emoji');
-    if (re) {
-      if (currentWorld.icon_image_url) re.innerHTML = `<img src="${currentWorld.icon_image_url}" style="width:32px;height:32px;border-radius:6px;object-fit:cover;border:2px solid rgba(255,255,255,0.3)" alt="">`;
-      else re.innerHTML = currentWorld.icon_emoji || '<i class="ti ti-world" style="font-size:24px;color:rgba(255,255,255,0.9)"></i>';
-    }
-    const rn = document.getElementById('rcard-name'); if (rn) rn.textContent = currentWorld.name;
-    const rd = document.getElementById('rside-desc'); if (rd) rd.textContent = currentWorld.description || '';
-  }
-  closeCustPanel();
-  toast('저장됐습니다');
 }
 
 // ─── 개인 설정 ───
