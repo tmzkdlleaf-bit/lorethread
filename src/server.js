@@ -1,10 +1,12 @@
+import 'dotenv/config';
 import http from 'http';
-import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'fs';
+import { readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs';
 import { join, dirname, extname } from 'path';
 import { fileURLToPath } from 'url';
 import { parse as parseCookie } from 'cookie';
 import bcrypt from 'bcryptjs';
 import { nanoid } from 'nanoid';
+import { v2 as cloudinary } from 'cloudinary';
 import {
   getUser, getUserByEmail, createUser, updateUser,
   getSession, createSession, deleteSession,
@@ -21,8 +23,18 @@ import {
 } from './db.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const PORT = 3000;
-const UPLOADS_DIR = join(__dirname, '../public/uploads');
+const PORT = process.env.PORT || 3000;
+
+// Cloudinary 설정
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+
+// 임시 업로드 폴더 (Cloudinary에 올린 뒤 삭제)
+const UPLOADS_DIR = join(__dirname, '../tmp_uploads');
 if (!existsSync(UPLOADS_DIR)) mkdirSync(UPLOADS_DIR, { recursive: true });
 
 // ── SSE ──
@@ -31,7 +43,6 @@ function broadcast(userId, data) {
   sseClients.get(userId)?.forEach(r => { try { r.write(`data: ${JSON.stringify(data)}\n\n`); } catch {} });
 }
 
-// ── Body parser ──
 function readBody(req) {
   return new Promise(resolve => {
     const ch = [];
@@ -40,12 +51,11 @@ function readBody(req) {
   });
 }
 
-// ── Multipart parser ──
 async function readMultipart(req) {
   return new Promise((resolve) => {
     const ch = [];
     req.on('data', c => ch.push(c));
-    req.on('end', () => {
+    req.on('end', async () => {
       try {
         const buf = Buffer.concat(ch);
         const ct = req.headers['content-type'] || '';
@@ -57,7 +67,7 @@ async function readMultipart(req) {
         for (let i = 0; i <= buf.length - bb.length; i++) {
           if (buf.slice(i, i + bb.length).equals(bb)) pos.push(i);
         }
-        const files = [];
+        const uploads = [];
         for (let pi = 0; pi < pos.length - 1; pi++) {
           const ps = pos[pi] + bb.length + 2;
           const pe = pos[pi + 1] - 2;
@@ -70,19 +80,31 @@ async function readMultipart(req) {
           const fn = hdr.match(/filename="([^"]+)"/)?.[1];
           if (fn) {
             const ext = extname(fn) || '.bin';
-            const name = nanoid() + ext;
-            writeFileSync(join(UPLOADS_DIR, name), data);
-            files.push({ url: '/uploads/' + name });
+            const tmpPath = join(UPLOADS_DIR, nanoid() + ext);
+            writeFileSync(tmpPath, data);
+            try {
+              // Cloudinary에 업로드
+              const result = await cloudinary.uploader.upload(tmpPath, {
+                folder: 'lorethread',
+                resource_type: 'auto',
+              });
+              uploads.push({ url: result.secure_url });
+            } finally {
+              // 임시 파일 삭제
+              try { unlinkSync(tmpPath); } catch {}
+            }
           }
         }
-        resolve({ files });
-      } catch { resolve({ files: [] }); }
+        resolve({ files: uploads });
+      } catch (e) {
+        console.error('Upload error:', e);
+        resolve({ files: [] });
+      }
     });
     req.on('error', () => resolve({ files: [] }));
   });
 }
 
-// ── Auth helper ──
 function getSessionUser(req) {
   try {
     const cookies = parseCookie(req.headers.cookie || '');
@@ -94,7 +116,6 @@ function getSessionUser(req) {
   } catch { return null; }
 }
 
-// ── Helpers ──
 function json(res, data, status = 200) {
   res.writeHead(status, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
   res.end(JSON.stringify(data));
@@ -112,17 +133,11 @@ function serveFile(res, fp) {
     res.end(content);
   } catch { res.writeHead(404); res.end('Not found'); }
 }
-
 function makeSlug(name) {
-  const base = name.trim()
-    .replace(/\s+/g, '-')
-    .replace(/[^\w\-가-힣]/g, '')
-    .toLowerCase()
-    .slice(0, 40);
+  const base = name.trim().replace(/\s+/g, '-').replace(/[^\w\-가-힣]/g, '').toLowerCase().slice(0, 40);
   return base + '-' + nanoid(4);
 }
 
-// ── Server ──
 const server = http.createServer(async (req, res) => {
   try {
     const rawPath = req.url.split('?')[0];
@@ -133,589 +148,507 @@ const server = http.createServer(async (req, res) => {
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     if (m === 'OPTIONS') { res.writeHead(204); return res.end(); }
 
-  // Static
-  if (rawPath.startsWith('/uploads/') || rawPath.startsWith('/static/')) {
-    return serveFile(res, join(__dirname, '../public', rawPath));
-  }
+    if (rawPath.startsWith('/static/')) {
+      return serveFile(res, join(__dirname, '../public', rawPath));
+    }
 
-  const user = getSessionUser(req);
+    const user = getSessionUser(req);
 
-  // ── SSE ──
-  if (path === '/api/events') {
-    if (!user) { res.writeHead(401); return res.end(); }
-    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
-    res.write('data: {"type":"connected"}\n\n');
-    if (!sseClients.has(user.id)) sseClients.set(user.id, new Set());
-    sseClients.get(user.id).add(res);
-    req.on('close', () => sseClients.get(user.id)?.delete(res));
-    return;
-  }
+    // ── SSE ──
+    if (path === '/api/events') {
+      if (!user) { res.writeHead(401); return res.end(); }
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
+      res.write('data: {"type":"connected"}\n\n');
+      if (!sseClients.has(user.id)) sseClients.set(user.id, new Set());
+      sseClients.get(user.id).add(res);
+      req.on('close', () => sseClients.get(user.id)?.delete(res));
+      return;
+    }
 
-  // ── Auth ──
-  if (path === '/api/auth/register' && m === 'POST') {
-    const b = await readBody(req);
-    if (!b.email || !b.password || !b.display_name)
-      return json(res, { error: '모든 항목을 입력해주세요.' }, 400);
-    if (getUserByEmail(b.email))
-      return json(res, { error: '이미 사용 중인 이메일입니다.' }, 400);
-    const role = getDb().users.length === 0 ? 'owner' : 'member';
-    const hash = await bcrypt.hash(b.password, 10);
-    const id = nanoid();
-    createUser({ id, email: b.email, password_hash: hash, display_name: b.display_name, role, theme: 'light', created_at: now() });
-    const sid = nanoid(32);
-    createSession({ id: sid, user_id: id, created_at: now() });
-    res.setHeader('Set-Cookie', `session=${sid}; Path=/; HttpOnly; Max-Age=2592000`);
-    return json(res, { ok: true, user: { id, email: b.email, display_name: b.display_name, role } });
-  }
-
-  if (path === '/api/auth/login' && m === 'POST') {
-    const b = await readBody(req);
-    const u = getUserByEmail(b.email);
-    if (!u || !(await bcrypt.compare(b.password, u.password_hash)))
-      return json(res, { error: '이메일 또는 비밀번호가 올바르지 않습니다.' }, 401);
-    const sid = nanoid(32);
-    createSession({ id: sid, user_id: u.id, created_at: now() });
-    res.setHeader('Set-Cookie', `session=${sid}; Path=/; HttpOnly; Max-Age=2592000`);
-    return json(res, { ok: true, user: { id: u.id, email: u.email, display_name: u.display_name, role: u.role } });
-  }
-
-  if (path === '/api/auth/logout' && m === 'POST') {
-    const cookies = parseCookie(req.headers.cookie || '');
-    if (cookies.session) deleteSession(cookies.session);
-    res.setHeader('Set-Cookie', 'session=; Path=/; Max-Age=0');
-    return json(res, { ok: true });
-  }
-
-  if (path === '/api/auth/me') {
-    if (!user) return json(res, { user: null });
-    return json(res, { user: { id: user.id, email: user.email, display_name: user.display_name, role: user.role, theme: user.theme }, worlds: getWorldsByUser(user.id) });
-  }
-
-  // ── Theme ──
-  if (path === '/api/user/theme' && m === 'POST') {
-    if (!user) return json(res, { error: 'Unauthorized' }, 401);
-    const b = await readBody(req);
-    updateUser(user.id, { theme: b.theme });
-    return json(res, { ok: true });
-  }
-
-  // ── Upload ──
-  if (path === '/api/upload' && m === 'POST') {
-    if (!user) return json(res, { error: 'Unauthorized' }, 401);
-    const { files } = await readMultipart(req);
-    return json(res, { ok: true, urls: files.map(f => f.url) });
-  }
-
-  // ── Notifications ──
-  if (path === '/api/notifications' && m === 'GET') {
-    if (!user) return json(res, { error: 'Unauthorized' }, 401);
-    return json(res, { notifications: getNotifs(user.id), unread: getUnreadCount(user.id) });
-  }
-  if (path === '/api/notifications/read' && m === 'POST') {
-    if (!user) return json(res, { error: 'Unauthorized' }, 401);
-    markAllRead(user.id);
-    return json(res, { ok: true });
-  }
-
-  // ── Multi-account ──
-  // ── Invite use (코드로 세계관 참여) ──
-  if (path === '/api/invite/use' && m === 'POST') {
-    if (!user) return json(res, { error: 'Unauthorized' }, 401);
-    const b = await readBody(req);
-    if (!b.code) return json(res, { error: '코드를 입력해주세요.' }, 400);
-    const db2 = getDb();
-    const invite = (db2.invites || []).find(i => i.code === b.code);
-    if (!invite) return json(res, { error: '유효하지 않은 초대 코드입니다.' }, 404);
-    const targetWorld = getDb().worlds.find(w => w.id === invite.world_id) || null;
-    if (!targetWorld) return json(res, { error: '세계관을 찾을 수 없습니다.' }, 404);
-    addWorldMember(targetWorld.id, user.id); // 이미 멤버면 무시됨 (db.js addWorldMember 중복 방지)
-    return json(res, { ok: true, world: targetWorld });
-  }
-
-  if (path === '/api/accounts' && m === 'GET') {
-    const db2 = getDb();
-    const seen = new Set();
-    const accounts = (db2.sessions || []).map(s => {
-      const u = getUser(s.user_id);
-      if (!u || seen.has(u.id)) return null;
-      seen.add(u.id);
-      return { session_id: s.id, user_id: u.id, display_name: u.display_name, email: u.email, role: u.role };
-    }).filter(Boolean);
-    return json(res, { accounts });
-  }
-
-  if (path === '/api/accounts/switch' && m === 'POST') {
-    const b = await readBody(req);
-    const target = getUser(b.user_id);
-    if (!target) return json(res, { error: '계정을 찾을 수 없습니다.' }, 404);
-    const db2 = getDb();
-    let sess = (db2.sessions || []).find(s => s.user_id === target.id);
-    if (!sess) {
+    // ── Auth ──
+    if (path === '/api/auth/register' && m === 'POST') {
+      const b = await readBody(req);
+      if (!b.email || !b.password || !b.display_name) return json(res, { error: '모든 항목을 입력해주세요.' }, 400);
+      if (getUserByEmail(b.email)) return json(res, { error: '이미 사용 중인 이메일입니다.' }, 400);
+      const db = getDb();
+      const isFirst = db.prepare('SELECT COUNT(*) as cnt FROM users').get().cnt === 0;
+      const role = isFirst ? 'owner' : 'member';
+      const hash = await bcrypt.hash(b.password, 10);
+      const id = nanoid();
+      createUser({ id, email: b.email, password_hash: hash, display_name: b.display_name, role, theme: 'light', created_at: now() });
       const sid = nanoid(32);
-      createSession({ id: sid, user_id: target.id, created_at: now() });
-      sess = { id: sid };
+      createSession({ id: sid, user_id: id, created_at: now() });
+      res.setHeader('Set-Cookie', `session=${sid}; Path=/; HttpOnly; Max-Age=2592000`);
+      return json(res, { ok: true, user: { id, email: b.email, display_name: b.display_name, role } });
     }
-    res.setHeader('Set-Cookie', `session=${sess.id}; Path=/; HttpOnly; Max-Age=2592000`);
-    return json(res, { ok: true, user: { id: target.id, email: target.email, display_name: target.display_name, role: target.role } });
-  }
 
-  // ── Worlds ──
-  if (path === '/api/worlds' && m === 'POST') {
-    if (!user) return json(res, { error: 'Unauthorized' }, 401);
-    const b = await readBody(req);
-    if (!b.name) return json(res, { error: '세계관 이름을 입력해주세요.' }, 400);
-    const slug = makeSlug(b.name);
-    const id = nanoid();
-    createWorld({ id, owner_id: user.id, name: b.name, slug, description: b.description || '', banner_color: b.banner_color || '#185FA5', icon_emoji: b.icon_emoji || '🌍', announce_text: b.announce_text || '', created_at: now() });
-    addWorldMember(id, user.id);
-    return json(res, { ok: true, world: getWorldBySlug(slug) });
-  }
+    if (path === '/api/auth/login' && m === 'POST') {
+      const b = await readBody(req);
+      const u = getUserByEmail(b.email);
+      if (!u || !(await bcrypt.compare(b.password, u.password_hash))) return json(res, { error: '이메일 또는 비밀번호가 올바르지 않습니다.' }, 401);
+      const sid = nanoid(32);
+      createSession({ id: sid, user_id: u.id, created_at: now() });
+      res.setHeader('Set-Cookie', `session=${sid}; Path=/; HttpOnly; Max-Age=2592000`);
+      return json(res, { ok: true, user: { id: u.id, email: u.email, display_name: u.display_name, role: u.role } });
+    }
 
-  if (path.startsWith('/api/worlds/')) {
-    const parts = path.slice('/api/worlds/'.length).split('/');
-    const slug = parts[0];
-    const sub = parts[1] || '';
-    const world = getWorldBySlug(slug);
-
-    // ── DELETE World ──
-    if (!sub && m === 'DELETE') {
-      if (!world) return json(res, { error: 'Not found' }, 404);
-      if (!user || world.owner_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
-      const db2 = getDb();
-      db2.worlds = db2.worlds.filter(w => w.id !== world.id);
-      db2.world_members = db2.world_members.filter(wm => wm.world_id !== world.id);
-      db2.characters = db2.characters.filter(c => c.world_id !== world.id);
-      db2.posts = db2.posts.filter(p => p.world_id !== world.id);
-      db2.announcements = (db2.announcements || []).filter(a => a.world_id !== world.id);
-      db2.events = (db2.events || []).filter(e => e.world_id !== world.id);
-      persist();
+    if (path === '/api/auth/logout' && m === 'POST') {
+      const cookies = parseCookie(req.headers.cookie || '');
+      if (cookies.session) deleteSession(cookies.session);
+      res.setHeader('Set-Cookie', 'session=; Path=/; Max-Age=0');
       return json(res, { ok: true });
     }
 
-    if (!sub) {
-      if (m === 'GET') {
-        if (!world) return json(res, { error: 'Not found' }, 404);
-        return json(res, { world, members: getWorldMembers(world.id) });
-      }
-      if (m === 'PATCH') {
-        if (!world || world.owner_id !== user?.id) return json(res, { error: 'Forbidden' }, 403);
-        const b = await readBody(req);
-        const updated = updateWorld(world.id, {
-          name: b.name ?? world.name,
-          description: b.description ?? world.description,
-          banner_color: b.banner_color ?? world.banner_color,
-          icon_emoji: b.icon_emoji ?? world.icon_emoji,
-          icon_image_url: b.icon_image_url ?? world.icon_image_url,
-          announce_text: b.announce_text ?? world.announce_text,
-          bg_image_url: b.bg_image_url ?? world.bg_image_url,
-          banner_image_url: b.banner_image_url ?? world.banner_image_url,
-          bg_overlay_opacity: b.bg_overlay_opacity ?? world.bg_overlay_opacity,
-          banner_height: b.banner_height ?? world.banner_height,
-        });
-        return json(res, { ok: true, world: updated || world });
-      }
+    if (path === '/api/auth/me') {
+      if (!user) return json(res, { user: null });
+      return json(res, { user: { id: user.id, email: user.email, display_name: user.display_name, role: user.role, theme: user.theme }, worlds: getWorldsByUser(user.id) });
     }
 
-    if (sub === 'join' && m === 'POST') {
-      if (!user) return json(res, { error: 'Unauthorized' }, 401);
-      if (!world) return json(res, { error: 'Not found' }, 404);
-      addWorldMember(world.id, user.id);
-      return json(res, { ok: true });
-    }
-
-    // ── Invite code 생성 (개설자만) ──
-    if (sub === 'invite' && m === 'POST') {
-      if (!user || world?.owner_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
-      const db2 = getDb();
-      if (!db2.invites) db2.invites = [];
-      // 기존 유효한 코드 있으면 재사용
-      const existing = db2.invites.find(i => i.world_id === world.id && !i.used);
-      if (existing) return json(res, { ok: true, code: existing.code });
-      const code = nanoid(10);
-      db2.invites.push({ code, world_id: world.id, created_by: user.id, created_at: now(), used: false });
-      persist();
-      return json(res, { ok: true, code });
-    }
-
-    // ── Invite code 사용 ──
-    if (sub === 'join-invite' && m === 'POST') {
+    if (path === '/api/user/theme' && m === 'POST') {
       if (!user) return json(res, { error: 'Unauthorized' }, 401);
       const b = await readBody(req);
-      const db2 = getDb();
-      const invite = (db2.invites || []).find(i => i.code === b.code && !i.used);
+      updateUser(user.id, { theme: b.theme });
+      return json(res, { ok: true });
+    }
+
+    if (path === '/api/upload' && m === 'POST') {
+      if (!user) return json(res, { error: 'Unauthorized' }, 401);
+      const { files } = await readMultipart(req);
+      return json(res, { ok: true, urls: files.map(f => f.url) });
+    }
+
+    if (path === '/api/notifications' && m === 'GET') {
+      if (!user) return json(res, { error: 'Unauthorized' }, 401);
+      return json(res, { notifications: getNotifs(user.id), unread: getUnreadCount(user.id) });
+    }
+    if (path === '/api/notifications/read' && m === 'POST') {
+      if (!user) return json(res, { error: 'Unauthorized' }, 401);
+      markAllRead(user.id);
+      return json(res, { ok: true });
+    }
+
+    // ── 계정 전환 ──
+    if (path === '/api/accounts' && m === 'GET') {
+      const db = getDb();
+      const sessions = db.prepare('SELECT DISTINCT user_id FROM sessions').all();
+      const seen = new Set();
+      const accounts = sessions.map(s => {
+        const u = getUser(s.user_id);
+        if (!u || seen.has(u.id)) return null;
+        seen.add(u.id);
+        return { user_id: u.id, display_name: u.display_name, email: u.email, role: u.role };
+      }).filter(Boolean);
+      return json(res, { accounts });
+    }
+    if (path === '/api/accounts/switch' && m === 'POST') {
+      const b = await readBody(req);
+      const target = getUser(b.user_id);
+      if (!target) return json(res, { error: '계정을 찾을 수 없습니다.' }, 404);
+      const db = getDb();
+      let sess = db.prepare('SELECT * FROM sessions WHERE user_id = ? LIMIT 1').get(target.id);
+      if (!sess) {
+        const sid = nanoid(32);
+        createSession({ id: sid, user_id: target.id, created_at: now() });
+        sess = { id: sid };
+      }
+      res.setHeader('Set-Cookie', `session=${sess.id}; Path=/; HttpOnly; Max-Age=2592000`);
+      return json(res, { ok: true, user: { id: target.id, email: target.email, display_name: target.display_name, role: target.role } });
+    }
+
+    // ── 초대 코드 사용 ──
+    if (path === '/api/invite/use' && m === 'POST') {
+      if (!user) return json(res, { error: 'Unauthorized' }, 401);
+      const b = await readBody(req);
+      if (!b.code) return json(res, { error: '코드를 입력해주세요.' }, 400);
+      const db = getDb();
+      const invite = db.prepare('SELECT * FROM invites WHERE code = ?').get(b.code);
       if (!invite) return json(res, { error: '유효하지 않은 초대 코드입니다.' }, 404);
-      const targetWorld = getDb().worlds.find(w => w.id === invite.world_id) || null;
+      const targetWorld = getWorldById(invite.world_id);
       if (!targetWorld) return json(res, { error: '세계관을 찾을 수 없습니다.' }, 404);
       addWorldMember(targetWorld.id, user.id);
       return json(res, { ok: true, world: targetWorld });
     }
 
-    if (sub === 'announcements') {
-      if (!world) return json(res, { error: 'Not found' }, 404);
-      if (m === 'GET') {
-        return json(res, { announcements: getAnnouncements(world.id) });
-      }
-      if (m === 'POST') {
+    // ── Worlds ──
+    if (path === '/api/worlds' && m === 'POST') {
+      if (!user) return json(res, { error: 'Unauthorized' }, 401);
+      const b = await readBody(req);
+      if (!b.name) return json(res, { error: '세계관 이름을 입력해주세요.' }, 400);
+      const slug = makeSlug(b.name);
+      const id = nanoid();
+      createWorld({ id, owner_id: user.id, name: b.name, slug, description: b.description || '', banner_color: b.banner_color || '#185FA5', icon_emoji: b.icon_emoji || '🌍', announce_text: b.announce_text || '', created_at: now() });
+      addWorldMember(id, user.id);
+      return json(res, { ok: true, world: getWorldBySlug(slug) });
+    }
+
+    if (path.startsWith('/api/worlds/')) {
+      const parts = path.slice('/api/worlds/'.length).split('/');
+      const slug = parts[0];
+      const sub = parts[1] || '';
+      const world = getWorldBySlug(slug);
+
+      if (!sub && m === 'DELETE') {
+        if (!world) return json(res, { error: 'Not found' }, 404);
         if (!user || world.owner_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
+        const db = getDb();
+        // 관련 데이터 모두 삭제
+        const charIds = db.prepare('SELECT id FROM characters WHERE world_id = ?').all(world.id).map(c => c.id);
+        for (const cid of charIds) {
+          db.prepare('DELETE FROM char_sections WHERE character_id = ?').run(cid);
+          db.prepare('DELETE FROM char_links WHERE character_id = ?').run(cid);
+        }
+        const postIds = db.prepare('SELECT id FROM posts WHERE world_id = ?').all(world.id).map(p => p.id);
+        for (const pid of postIds) {
+          db.prepare('DELETE FROM post_media WHERE post_id = ?').run(pid);
+          db.prepare('DELETE FROM reactions WHERE post_id = ?').run(pid);
+        }
+        db.prepare('DELETE FROM posts WHERE world_id = ?').run(world.id);
+        db.prepare('DELETE FROM characters WHERE world_id = ?').run(world.id);
+        db.prepare('DELETE FROM world_members WHERE world_id = ?').run(world.id);
+        db.prepare('DELETE FROM announcements WHERE world_id = ?').run(world.id);
+        db.prepare('DELETE FROM events WHERE world_id = ?').run(world.id);
+        db.prepare('DELETE FROM invites WHERE world_id = ?').run(world.id);
+        db.prepare('DELETE FROM worlds WHERE id = ?').run(world.id);
+        return json(res, { ok: true });
+      }
+
+      if (!sub) {
+        if (m === 'GET') {
+          if (!world) return json(res, { error: 'Not found' }, 404);
+          return json(res, { world, members: getWorldMembers(world.id) });
+        }
+        if (m === 'PATCH') {
+          if (!world || world.owner_id !== user?.id) return json(res, { error: 'Forbidden' }, 403);
+          const b = await readBody(req);
+          const updated = updateWorld(world.id, b);
+          return json(res, { ok: true, world: updated || world });
+        }
+      }
+
+      if (sub === 'join' && m === 'POST') {
+        if (!user) return json(res, { error: 'Unauthorized' }, 401);
+        if (!world) return json(res, { error: 'Not found' }, 404);
+        addWorldMember(world.id, user.id);
+        return json(res, { ok: true });
+      }
+
+      if (sub === 'invite' && m === 'POST') {
+        if (!user || world?.owner_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
+        const db = getDb();
+        const existing = db.prepare('SELECT * FROM invites WHERE world_id = ?').get(world.id);
+        if (existing) return json(res, { ok: true, code: existing.code });
+        const code = nanoid(10);
+        db.prepare('INSERT INTO invites (code,world_id,created_by,created_at) VALUES (?,?,?,?)').run(code, world.id, user.id, now());
+        return json(res, { ok: true, code });
+      }
+
+      if (sub === 'announcements') {
+        if (!world) return json(res, { error: 'Not found' }, 404);
+        if (m === 'GET') return json(res, { announcements: getAnnouncements(world.id) });
+        if (m === 'POST') {
+          if (!user || world.owner_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
+          const b = await readBody(req);
+          if (!b.title) return json(res, { error: '제목을 입력해주세요.' }, 400);
+          createAnnouncement({ id: nanoid(), world_id: world.id, title: b.title, content: b.content || '', author_id: user.id, created_at: now() });
+          return json(res, { ok: true });
+        }
+      }
+
+      if (parts[1] === 'announcements' && parts[2] && m === 'DELETE') {
+        if (!user || world?.owner_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
+        deleteAnnouncement(parts[2]);
+        return json(res, { ok: true });
+      }
+
+      if (sub === 'events') {
+        if (!world) return json(res, { error: 'Not found' }, 404);
+        if (m === 'GET') {
+          const db = getDb();
+          const events = db.prepare('SELECT * FROM events WHERE world_id = ? ORDER BY start_date ASC').all(world.id);
+          return json(res, { events });
+        }
+        if (m === 'POST') {
+          if (!user || world.owner_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
+          const b = await readBody(req);
+          if (!b.title || !b.start_date || !b.end_date) return json(res, { error: '제목과 기간을 입력해주세요.' }, 400);
+          const db = getDb();
+          db.prepare('INSERT INTO events (id,world_id,title,content,start_date,end_date,color,created_at) VALUES (?,?,?,?,?,?,?,?)')
+            .run(nanoid(), world.id, b.title, b.content||'', b.start_date, b.end_date, b.color||'#5865F2', now());
+          return json(res, { ok: true });
+        }
+      }
+
+      if (parts[1] === 'events' && parts[2] && m === 'DELETE') {
+        if (!world || !user || world.owner_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
+        getDb().prepare('DELETE FROM events WHERE id = ?').run(parts[2]);
+        return json(res, { ok: true });
+      }
+
+      if (parts[1] === 'posts' && parts[2] === 'following' && m === 'GET') {
+        if (!world) return json(res, { error: 'Not found' }, 404);
+        const qs = new URL(req.url, `http://localhost:${PORT}`).searchParams;
+        const offset = parseInt(qs.get('offset') || '0');
+        const myCharIds = user ? getCharsByUser(user.id, world.id).map(c => c.id) : [];
+        const db = getDb();
+        const followingCharIds = db.prepare(
+          `SELECT following_character_id FROM follows WHERE follower_character_id IN (${myCharIds.map(()=>'?').join(',') || "''"})`)
+          .all(...myCharIds).map(f => f.following_character_id);
+        if (!followingCharIds.length) return json(res, { posts: [] });
+        const posts = getPostsByWorld(world.id, 30, offset)
+          .filter(p => followingCharIds.includes(p.character_id))
+          .map(p => ({ ...p, userReacted: myCharIds.some(cid => !!getReaction(p.id, cid)) }));
+        return json(res, { posts });
+      }
+
+      if (sub === 'characters') {
+        if (!world) return json(res, { error: 'Not found' }, 404);
+        if (m === 'GET') return json(res, { characters: getCharsByWorld(world.id) });
+        if (m === 'POST') {
+          if (!user) return json(res, { error: 'Unauthorized' }, 401);
+          const b = await readBody(req);
+          if (!b.name || !b.handle) return json(res, { error: '이름과 핸들을 입력해주세요.' }, 400);
+          const handle = b.handle.toLowerCase().trim().replace(/[^a-z0-9_가-힣]/gi, '').slice(0, 20);
+          if (getCharByHandle(world.id, handle)) return json(res, { error: '이미 사용 중인 핸들입니다.' }, 400);
+          const id = nanoid();
+          createChar({ id, user_id: user.id, world_id: world.id, name: b.name, handle, role: b.role||'', bio: b.bio||'', color_bg: b.color_bg||'#E6F1FB', color_fg: b.color_fg||'#185FA5', avatar_url: b.avatar_url||'', header_url: b.header_url||'', is_npc: b.is_npc?1:0, created_at: now() });
+          if (b.sections?.length) setCharSections(id, b.sections);
+          if (b.links?.length) setCharLinks(id, b.links);
+          return json(res, { ok: true, character: getCharById(id) });
+        }
+      }
+
+      if (sub === 'posts') {
+        if (!world) return json(res, { error: 'Not found' }, 404);
+        if (m === 'GET') {
+          const qs = new URL(req.url, `http://localhost:${PORT}`).searchParams;
+          const offset = parseInt(qs.get('offset') || '0');
+          const tag = qs.get('tag') || '';
+          const myCharIds = user ? getCharsByUser(user.id, world.id).map(c => c.id) : [];
+          let posts = getPostsByWorld(world.id, 30, offset).map(p => ({ ...p, userReacted: myCharIds.some(cid => !!getReaction(p.id, cid)) }));
+          if (tag) posts = posts.filter(p => p.content?.toLowerCase().includes('#' + tag.toLowerCase()));
+          return json(res, { posts });
+        }
+        if (m === 'POST') {
+          if (!user) return json(res, { error: 'Unauthorized' }, 401);
+          const b = await readBody(req);
+          if (!b.content && !b.media_urls?.length) return json(res, { error: '내용을 입력해주세요.' }, 400);
+          if (!b.character_id) return json(res, { error: '캐릭터를 선택해주세요.' }, 400);
+          const char = getCharsByUser(user.id, world.id).find(c => c.id === b.character_id);
+          if (!char) return json(res, { error: '본인 캐릭터가 아닙니다.' }, 403);
+          const id = nanoid();
+          createPost({ id, character_id: b.character_id, world_id: world.id, content: b.content || '', reply_to_id: b.reply_to_id || null, created_at: now() });
+          if (b.media_urls?.length) {
+            b.media_urls.slice(0, 4).forEach((u, i) => addPostMedia({ id: nanoid(), post_id: id, url: u, media_type: /\.(mp4|webm)$/i.test(u) ? 'video' : 'image', sort_order: i }));
+          }
+          if (b.reply_to_id) {
+            const parent = getPostById(b.reply_to_id);
+            if (parent && parent.user_id && parent.user_id !== user.id) {
+              createNotif({ id: nanoid(), recipient_user_id: parent.user_id, type: 'reply', actor_character_id: b.character_id, post_id: id, created_at: now() });
+              broadcast(parent.user_id, { type: 'reply', actor: char.name, postId: id });
+            }
+          }
+          for (const [, handle] of (b.content || '').matchAll(/@([a-z0-9_가-힣]+)/gi)) {
+            const mc = getCharByHandle(world.id, handle);
+            if (mc && mc.user_id !== user.id) {
+              createNotif({ id: nanoid(), recipient_user_id: mc.user_id, type: 'mention', actor_character_id: b.character_id, post_id: id, created_at: now() });
+              broadcast(mc.user_id, { type: 'mention', actor: char.name, handle, postId: id });
+            }
+          }
+          return json(res, { ok: true, post: { ...getPostById(id), userReacted: false } });
+        }
+      }
+
+      return json(res, { error: 'Not found' }, 404);
+    }
+
+    // ── Characters ──
+    if (path.startsWith('/api/characters/')) {
+      const parts = path.slice('/api/characters/'.length).split('/');
+      const charId = parts[0];
+      const sub = parts[1] || '';
+
+      if (sub === 'is-following' && m === 'GET') {
+        const qs = new URL(req.url, `http://localhost:${PORT}`).searchParams;
+        const myCharId = qs.get('character_id');
+        const db = getDb();
+        const following = !!db.prepare('SELECT 1 FROM follows WHERE follower_character_id = ? AND following_character_id = ?').get(myCharId, charId);
+        return json(res, { following });
+      }
+
+      if (sub === 'follow' && m === 'POST') {
+        if (!user) return json(res, { error: 'Unauthorized' }, 401);
         const b = await readBody(req);
-        if (!b.title) return json(res, { error: '제목을 입력해주세요.' }, 400);
-        const id = nanoid();
-        createAnnouncement({ id, world_id: world.id, title: b.title, content: b.content || '', author_id: user.id, created_at: now() });
+        const myChar = getCharById(b.character_id);
+        if (!myChar || myChar.user_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
+        const db = getDb();
+        const existing = db.prepare('SELECT 1 FROM follows WHERE follower_character_id = ? AND following_character_id = ?').get(b.character_id, charId);
+        if (existing) {
+          db.prepare('DELETE FROM follows WHERE follower_character_id = ? AND following_character_id = ?').run(b.character_id, charId);
+        } else {
+          db.prepare('INSERT OR IGNORE INTO follows (id,follower_character_id,following_character_id,created_at) VALUES (?,?,?,?)').run(nanoid(), b.character_id, charId, now());
+        }
+        return json(res, { ok: true, followed: !existing, followerCount: getFollowerCount(charId) });
+      }
+
+      if (!sub && m === 'GET') {
+        const c = getCharById(charId);
+        if (!c) return json(res, { error: 'Not found' }, 404);
+        c.sections = getCharSections(charId);
+        c.links = getCharLinks(charId);
+        return json(res, { character: c, posts: getPostsByChar(charId, 20), followerCount: getFollowerCount(charId), followingCount: getFollowingCount(charId) });
+      }
+
+      if (!sub && m === 'PATCH') {
+        if (!user) return json(res, { error: 'Unauthorized' }, 401);
+        const c = getCharById(charId);
+        if (!c || c.user_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
+        const b = await readBody(req);
+        updateChar(charId, b);
+        if (b.sections) setCharSections(charId, b.sections);
+        if (b.links) setCharLinks(charId, b.links);
+        const updated = getCharById(charId);
+        updated.sections = getCharSections(charId);
+        updated.links = getCharLinks(charId);
+        return json(res, { ok: true, character: updated });
+      }
+
+      if (!sub && m === 'DELETE') {
+        if (!user) return json(res, { error: 'Unauthorized' }, 401);
+        const c = getCharById(charId);
+        if (!c) return json(res, { error: 'Not found' }, 404);
+        if (c.user_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
+        const db = getDb();
+        db.prepare('DELETE FROM char_sections WHERE character_id = ?').run(charId);
+        db.prepare('DELETE FROM char_links WHERE character_id = ?').run(charId);
+        const postIds = db.prepare('SELECT id FROM posts WHERE character_id = ?').all(charId).map(p => p.id);
+        for (const pid of postIds) {
+          db.prepare('DELETE FROM post_media WHERE post_id = ?').run(pid);
+          db.prepare('DELETE FROM reactions WHERE post_id = ?').run(pid);
+        }
+        db.prepare('DELETE FROM posts WHERE character_id = ?').run(charId);
+        db.prepare('DELETE FROM characters WHERE id = ?').run(charId);
         return json(res, { ok: true });
       }
     }
 
-    if (parts[1] === 'announcements' && parts[2] && m === 'DELETE') {
-      if (!user || world?.owner_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
-      deleteAnnouncement(parts[2]);
-      return json(res, { ok: true });
-    }
+    // ── Posts ──
+    if (path.startsWith('/api/posts/')) {
+      const parts = path.slice('/api/posts/'.length).split('/');
+      const postId = parts[0];
+      const sub = parts[1] || '';
 
-    if (sub === 'events') {
-      if (!world) return json(res, { error: 'Not found' }, 404);
-      if (m === 'GET') {
-        const db2 = getDb();
-        const events = (db2.events || [])
-          .filter(e => e.world_id === world.id)
-          .sort((a, b) => a.start_date.localeCompare(b.start_date));
-        return json(res, { events });
-      }
-      if (m === 'POST') {
-        if (!user || world.owner_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
-        const b = await readBody(req);
-        if (!b.title || !b.start_date || !b.end_date) return json(res, { error: '제목과 기간을 입력해주세요.' }, 400);
-        const db2 = getDb();
-        if (!db2.events) db2.events = [];
-        const id = nanoid();
-        const ev = { id, world_id: world.id, title: b.title, content: b.content || '', start_date: b.start_date, end_date: b.end_date, color: b.color || '#5865F2', created_at: now() };
-        db2.events.push(ev);
-        persist();
-        return json(res, { ok: true, event: ev });
-      }
-    }
+      if (sub === 'replies' && m === 'GET') return json(res, { replies: getReplies(postId) });
 
-    // 팔로잉 피드 전용 라우트
-    if (parts[1] === 'posts' && parts[2] === 'following' && m === 'GET') {
-      if (!world) return json(res, { error: 'Not found' }, 404);
-      const qs = new URL(req.url, `http://localhost:${PORT}`).searchParams;
-      const offset = parseInt(qs.get('offset') || '0');
-      const myCharIds = user ? getCharsByUser(user.id, world.id).map(c => c.id) : [];
-      const db2 = getDb();
-      const followingCharIds = (db2.follows || [])
-        .filter(f => myCharIds.includes(f.follower_character_id))
-        .map(f => f.following_character_id);
-      const posts = getPostsByWorld(world.id, 30, offset)
-        .filter(p => followingCharIds.includes(p.character_id))
-        .map(p => ({ ...p, userReacted: myCharIds.some(cid => !!getReaction(p.id, cid)) }));
-      return json(res, { posts });
-    }
-
-    if (parts[1] === 'events' && parts[2] && m === 'DELETE') {
-      if (!world) return json(res, { error: 'Not found' }, 404);
-      if (!user || world.owner_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
-      const db2 = getDb();
-      db2.events = (db2.events || []).filter(e => e.id !== parts[2]);
-      persist();
-      return json(res, { ok: true });
-    }
-
-    if (sub === 'characters') {
-      if (!world) return json(res, { error: 'Not found' }, 404);
-      if (m === 'GET') return json(res, { characters: getCharsByWorld(world.id) });
-      if (m === 'POST') {
-        if (!user) return json(res, { error: 'Unauthorized' }, 401);
-        const b = await readBody(req);
-        if (!b.name || !b.handle) return json(res, { error: '이름과 핸들을 입력해주세요.' }, 400);
-        const handle = b.handle.toLowerCase().trim().replace(/[^a-z0-9_가-힣]/gi, '').slice(0, 20);
-        if (getCharByHandle(world.id, handle)) return json(res, { error: '이미 사용 중인 핸들입니다.' }, 400);
-        const id = nanoid();
-        createChar({ id, user_id: user.id, world_id: world.id, name: b.name, handle, role: b.role || '', bio: b.bio || '', color_bg: b.color_bg || '#E6F1FB', color_fg: b.color_fg || '#185FA5', avatar_url: b.avatar_url || '', header_url: b.header_url || '', is_npc: b.is_npc ? 1 : 0, created_at: now() });
-        if (b.sections?.length) setCharSections(id, b.sections);
-        if (b.links?.length) setCharLinks(id, b.links);
-        return json(res, { ok: true, character: getCharById(id) });
-      }
-    }
-
-    if (sub === 'posts') {
-      if (!world) return json(res, { error: 'Not found' }, 404);
-      if (m === 'GET') {
-        const qs = new URL(req.url, `http://localhost:${PORT}`).searchParams;
-        const offset = parseInt(qs.get('offset') || '0');
-        const tag = qs.get('tag') || '';
-        const myCharIds = user ? getCharsByUser(user.id, world.id).map(c => c.id) : [];
-
-        // 팔로잉 피드
-        if (qs.get('following') === '1' || req.url.includes('/posts/following')) {
-          const db2 = getDb();
-          const followingCharIds = (db2.follows || [])
-            .filter(f => myCharIds.includes(f.follower_character_id))
-            .map(f => f.following_character_id);
-          const posts = getPostsByWorld(world.id, 30, offset)
-            .filter(p => followingCharIds.includes(p.character_id))
-            .map(p => ({ ...p, userReacted: myCharIds.some(cid => !!getReaction(p.id, cid)) }));
-          return json(res, { posts });
-        }
-
-        let posts = getPostsByWorld(world.id, 30, offset).map(p => ({
-          ...p, userReacted: myCharIds.some(cid => !!getReaction(p.id, cid))
-        }));
-
-        // 태그 필터
-        if (tag) {
-          posts = posts.filter(p => p.content && p.content.toLowerCase().includes('#' + tag.toLowerCase()));
-        }
-
-        return json(res, { posts });
-      }
-      if (m === 'POST') {
-        if (!user) return json(res, { error: 'Unauthorized' }, 401);
-        const b = await readBody(req);
-        if (!b.content && !b.media_urls?.length) return json(res, { error: '내용을 입력해주세요.' }, 400);
-        if (!b.character_id) return json(res, { error: '캐릭터를 선택해주세요.' }, 400);
-        const myChars = getCharsByUser(user.id, world.id);
-        const char = myChars.find(c => c.id === b.character_id);
-        if (!char) return json(res, { error: '본인 캐릭터가 아닙니다.' }, 403);
-        const id = nanoid();
-        createPost({ id, character_id: b.character_id, world_id: world.id, content: b.content || '', reply_to_id: b.reply_to_id || null, is_pinned: 0, created_at: now() });
-        if (b.media_urls?.length) {
-          b.media_urls.slice(0, 4).forEach((u, i) => addPostMedia({ id: nanoid(), post_id: id, url: u, media_type: /\.(mp4|webm)$/i.test(u) ? 'video' : 'image', sort_order: i }));
-        }
-        if (b.reply_to_id) {
-          const parent = getPostById(b.reply_to_id);
-          if (parent && parent.user_id && parent.user_id !== user.id) {
-            createNotif({ id: nanoid(), recipient_user_id: parent.user_id, type: 'reply', actor_character_id: b.character_id, post_id: id, is_read: false, created_at: now() });
-            broadcast(parent.user_id, { type: 'reply', actor: char.name, postId: id });
-          }
-        }
-        for (const [, handle] of (b.content || '').matchAll(/@([a-z0-9_가-힣]+)/gi)) {
-          const mc = getCharByHandle(world.id, handle);
-          if (mc && mc.user_id !== user.id) {
-            createNotif({ id: nanoid(), recipient_user_id: mc.user_id, type: 'mention', actor_character_id: b.character_id, post_id: id, is_read: false, created_at: now() });
-            broadcast(mc.user_id, { type: 'mention', actor: char.name, handle, postId: id });
-          }
-        }
-        return json(res, { ok: true, post: { ...getPostById(id), userReacted: false } });
-      }
-    }
-
-    return json(res, { error: 'Not found' }, 404);
-  }
-
-  // ── Characters ──
-  if (path.startsWith('/api/characters/')) {
-    const parts = path.slice('/api/characters/'.length).split('/');
-    const charId = parts[0];
-    const sub = parts[1] || '';
-
-    if (sub === 'is-following' && m === 'GET') {
-      const qs = new URL(req.url, `http://localhost:${PORT}`).searchParams;
-      const myCharId = qs.get('character_id');
-      const db2 = getDb();
-      const following = !!(db2.follows || []).find(f => f.follower_character_id === myCharId && f.following_character_id === charId);
-      return json(res, { following });
-    }
-
-    if (sub === 'follow' && m === 'POST') {
-      if (!user) return json(res, { error: 'Unauthorized' }, 401);
-      const b = await readBody(req);
-      const myChar = getCharById(b.character_id);
-      if (!myChar || myChar.user_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
-      const db2 = getDb();
-      if (!db2.follows) db2.follows = [];
-      const existing = db2.follows.find(f => f.follower_character_id === b.character_id && f.following_character_id === charId);
-      if (existing) {
-        db2.follows = db2.follows.filter(f => !(f.follower_character_id === b.character_id && f.following_character_id === charId));
-      } else {
-        db2.follows.push({ id: nanoid(), follower_character_id: b.character_id, following_character_id: charId, created_at: now() });
-      }
-      persist();
-      return json(res, { ok: true, followed: !existing, followerCount: getFollowerCount(charId) });
-    }
-
-    if (!sub && m === 'GET') {
-      const c = getCharById(charId);
-      if (!c) return json(res, { error: 'Not found' }, 404);
-      c.sections = getCharSections(charId);
-      c.links = getCharLinks(charId);
-      return json(res, { character: c, posts: getPostsByChar(charId, 20), followerCount: getFollowerCount(charId), followingCount: getFollowingCount(charId) });
-    }
-
-    if (!sub && m === 'PATCH') {
-      if (!user) return json(res, { error: 'Unauthorized' }, 401);
-      const c = getCharById(charId);
-      if (!c || c.user_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
-      const b = await readBody(req);
-      const upd = {};
-      for (const f of ['name', 'role', 'bio', 'color_bg', 'color_fg', 'avatar_url', 'header_url', 'pinned_post_id']) {
-        if (b[f] !== undefined) upd[f] = b[f];
-      }
-      updateChar(charId, upd);
-      if (b.sections) setCharSections(charId, b.sections);
-      if (b.links) setCharLinks(charId, b.links);
-      const updated = getCharById(charId);
-      updated.sections = getCharSections(charId);
-      updated.links = getCharLinks(charId);
-      return json(res, { ok: true, character: updated });
-    }
-
-    if (!sub && m === 'DELETE') {
-      if (!user) return json(res, { error: 'Unauthorized' }, 401);
-      const char = getCharById(charId);
-      if (!char) return json(res, { error: 'Not found' }, 404);
-      if (char.user_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
-      const db2 = getDb();
-      db2.characters = db2.characters.filter(c => c.id !== charId);
-      db2.char_sections = (db2.char_sections || []).filter(s => s.character_id !== charId);
-      db2.char_links = (db2.char_links || []).filter(l => l.character_id !== charId);
-      db2.posts = db2.posts.filter(p => p.character_id !== charId);
-      persist();
-      return json(res, { ok: true });
-    }
-  }
-
-  // ── Posts ──
-  if (path.startsWith('/api/posts/')) {
-    const parts = path.slice('/api/posts/'.length).split('/');
-    const postId = parts[0];
-    const sub = parts[1] || '';
-
-    if (sub === 'replies' && m === 'GET') {
-      return json(res, { replies: getReplies(postId) });
-    }
-
-    if (sub === 'thread' && m === 'GET') {
-      const post = getPostById(postId);
-      if (!post) return json(res, { error: 'Not found' }, 404);
-      const ancestors = [];
-      let cur = post.reply_to_id ? getPostById(post.reply_to_id) : null;
-      while (cur) { ancestors.unshift(cur); cur = cur.reply_to_id ? getPostById(cur.reply_to_id) : null; }
-      const myCharIds = user ? getCharsByUser(user.id, post.world_id).map(c => c.id) : [];
-      const enrich = p => ({ ...p, userReacted: myCharIds.some(cid => !!getReaction(p.id, cid)) });
-      return json(res, { ancestors: ancestors.map(enrich), post: enrich(post), replies: getReplies(postId).map(enrich) });
-    }
-
-    if (!sub && m === 'PATCH') {
-      if (!user) return json(res, { error: 'Unauthorized' }, 401);
-      const post = getPostById(postId);
-      if (!post) return json(res, { error: 'Not found' }, 404);
-      const c = getCharById(post.character_id);
-      if (!c || c.user_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
-      const b = await readBody(req);
-      const db2 = getDb();
-      const pi = db2.posts.findIndex(p => p.id === postId);
-      if (pi >= 0) {
-        if (b.content !== undefined) db2.posts[pi].content = b.content;
-        if (b.is_pinned !== undefined) db2.posts[pi].is_pinned = b.is_pinned ? 1 : 0;
-        db2.posts[pi].edited_at = now();
-        persist();
-      }
-      return json(res, { ok: true, post: getPostById(postId) });
-    }
-
-    if (sub === 'react' && m === 'POST') {
-      if (!user) return json(res, { error: 'Unauthorized' }, 401);
-      const b = await readBody(req);
-      const c = getCharById(b.character_id);
-      if (!c || c.user_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
-      const existing = getReaction(postId, b.character_id);
-      if (existing) {
-        removeReaction(postId, b.character_id);
-      } else {
-        addReaction({ id: nanoid(), post_id: postId, character_id: b.character_id, created_at: now() });
-        // 알림 생성 (자신의 포스트에 좋아요 시 제외)
+      if (sub === 'thread' && m === 'GET') {
         const post = getPostById(postId);
-        if (post && post.user_id && post.user_id !== user.id) {
-          createNotif({ id: nanoid(), recipient_user_id: post.user_id, type: 'react', actor_character_id: b.character_id, post_id: postId, is_read: false, created_at: now() });
-          broadcast(post.user_id, { type: 'react', actor: c.name, postId });
-        }
+        if (!post) return json(res, { error: 'Not found' }, 404);
+        const ancestors = [];
+        let cur = post.reply_to_id ? getPostById(post.reply_to_id) : null;
+        while (cur) { ancestors.unshift(cur); cur = cur.reply_to_id ? getPostById(cur.reply_to_id) : null; }
+        const myCharIds = user ? getCharsByUser(user.id, post.world_id).map(c => c.id) : [];
+        const enrich = p => ({ ...p, userReacted: myCharIds.some(cid => !!getReaction(p.id, cid)) });
+        return json(res, { ancestors: ancestors.map(enrich), post: enrich(post), replies: getReplies(postId).map(enrich) });
       }
-      return json(res, { ok: true, count: getReactionCount(postId), reacted: !existing });
+
+      if (!sub && m === 'PATCH') {
+        if (!user) return json(res, { error: 'Unauthorized' }, 401);
+        const post = getPostById(postId);
+        if (!post) return json(res, { error: 'Not found' }, 404);
+        const c = getCharById(post.character_id);
+        if (!c || c.user_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
+        const b = await readBody(req);
+        const db = getDb();
+        const updates = [];
+        const vals = [];
+        if (b.content !== undefined) { updates.push('content = ?'); vals.push(b.content); }
+        if (b.is_pinned !== undefined) { updates.push('is_pinned = ?'); vals.push(b.is_pinned ? 1 : 0); }
+        updates.push('edited_at = ?'); vals.push(now());
+        db.prepare(`UPDATE posts SET ${updates.join(', ')} WHERE id = ?`).run(...vals, postId);
+        return json(res, { ok: true, post: getPostById(postId) });
+      }
+
+      if (sub === 'react' && m === 'POST') {
+        if (!user) return json(res, { error: 'Unauthorized' }, 401);
+        const b = await readBody(req);
+        const c = getCharById(b.character_id);
+        if (!c || c.user_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
+        const existing = getReaction(postId, b.character_id);
+        if (existing) { removeReaction(postId, b.character_id); }
+        else {
+          addReaction({ id: nanoid(), post_id: postId, character_id: b.character_id, created_at: now() });
+          const post = getPostById(postId);
+          if (post && post.user_id && post.user_id !== user.id) {
+            createNotif({ id: nanoid(), recipient_user_id: post.user_id, type: 'react', actor_character_id: b.character_id, post_id: postId, created_at: now() });
+            broadcast(post.user_id, { type: 'react', actor: c.name, postId });
+          }
+        }
+        return json(res, { ok: true, count: getReactionCount(postId), reacted: !existing });
+      }
+
+      if (!sub && m === 'DELETE') {
+        if (!user) return json(res, { error: 'Unauthorized' }, 401);
+        const post = getPostById(postId);
+        if (!post) return json(res, { error: 'Not found' }, 404);
+        const c = getCharById(post.character_id);
+        if (!c || c.user_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
+        deletePost(postId);
+        return json(res, { ok: true });
+      }
     }
 
-    if (!sub && m === 'DELETE') {
+    // ── DM ──
+    if (path === '/api/dm/rooms' && m === 'GET') {
       if (!user) return json(res, { error: 'Unauthorized' }, 401);
-      const post = getPostById(postId);
-      if (!post) return json(res, { error: 'Not found' }, 404);
-      const c = getCharById(post.character_id);
-      if (!c || c.user_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
-      deletePost(postId);
-      return json(res, { ok: true });
+      return json(res, { rooms: getRoomsByUser(user.id) });
     }
-  }
-
-  // ── DM Rooms ──
-  if (path === '/api/dm/rooms' && m === 'GET') {
-    if (!user) return json(res, { error: 'Unauthorized' }, 401);
-    return json(res, { rooms: getRoomsByUser(user.id) });
-  }
-
-  if (path === '/api/dm/rooms' && m === 'POST') {
-    if (!user) return json(res, { error: 'Unauthorized' }, 401);
-    const b = await readBody(req);
-    const { type, name, members, character_id, world_id } = b;
-    if (!members || !members.length) return json(res, { error: 'members required' }, 400);
-    if (type === 'dm' && members.length === 1) {
-      const existing = findDmRoom(user.id, members[0]);
-      if (existing) return json(res, { ok: true, room: getRoomById(existing.id) });
-    }
-    const id = nanoid();
-    const roomName = type === 'dm' ? '' : (name || '새 그룹');
-    createRoom({ id, name: roomName, type: type || 'dm', world_id: world_id || null, created_by: user.id, created_at: now() });
-    addRoomMember({ room_id: id, user_id: user.id, character_id: character_id || null, joined_at: now() });
-    for (const uid of members) {
-      if (uid !== user.id) addRoomMember({ room_id: id, user_id: uid, character_id: null, joined_at: now() });
-    }
-    return json(res, { ok: true, room: { ...getRoomById(id), members: getRoomMembers(id) } });
-  }
-
-  if (path.startsWith('/api/dm/rooms/')) {
-    const parts = path.slice('/api/dm/rooms/'.length).split('/');
-    const roomId = parts[0];
-    const sub = parts[1] || '';
-
-    if (!sub && m === 'GET') {
+    if (path === '/api/dm/rooms' && m === 'POST') {
       if (!user) return json(res, { error: 'Unauthorized' }, 401);
-      const room = getRoomById(roomId);
-      if (!room || !isRoomMember(roomId, user.id)) return json(res, { error: 'Forbidden' }, 403);
-      const msgs = getDmMessages(roomId);
-      markDmRead(user.id, roomId);
-      return json(res, { room, messages: msgs, members: getRoomMembers(roomId) });
-    }
-
-    if (sub === 'messages' && m === 'POST') {
-      if (!user) return json(res, { error: 'Unauthorized' }, 401);
-      if (!isRoomMember(roomId, user.id)) return json(res, { error: 'Forbidden' }, 403);
       const b = await readBody(req);
-      if (!b.content) return json(res, { error: 'content required' }, 400);
+      const { type, name, members, character_id, world_id } = b;
+      if (!members || !members.length) return json(res, { error: 'members required' }, 400);
+      if (type === 'dm' && members.length === 1) {
+        const existing = findDmRoom(user.id, members[0]);
+        if (existing) return json(res, { ok: true, room: { ...getRoomById(existing.id), members: getRoomMembers(existing.id) } });
+      }
       const id = nanoid();
-      createDmMessage({ id, room_id: roomId, sender_user_id: user.id, character_id: b.character_id || null, content: b.content, created_at: now() });
-      markDmRead(user.id, roomId);
-      const members = getRoomMembers(roomId);
-      for (const mem of members) {
-        if (mem.user_id !== user.id) {
-          broadcast(mem.user_id, { type: 'dm', roomId, senderId: user.id, content: b.content.slice(0, 60) });
-        }
+      createRoom({ id, name: type === 'dm' ? '' : (name || '새 그룹'), type: type || 'dm', world_id: world_id || null, created_by: user.id, created_at: now() });
+      addRoomMember({ room_id: id, user_id: user.id, character_id: character_id || null, joined_at: now() });
+      for (const uid of members) {
+        if (uid !== user.id) addRoomMember({ room_id: id, user_id: uid, character_id: null, joined_at: now() });
       }
-      return json(res, { ok: true, messages: getDmMessages(roomId) });
+      return json(res, { ok: true, room: { ...getRoomById(id), members: getRoomMembers(id) } });
     }
-
-    if (sub === 'members' && m === 'POST') {
+    if (path.startsWith('/api/dm/rooms/')) {
+      const parts = path.slice('/api/dm/rooms/'.length).split('/');
+      const roomId = parts[0];
+      const sub = parts[1] || '';
+      if (!sub && m === 'GET') {
+        if (!user) return json(res, { error: 'Unauthorized' }, 401);
+        const room = getRoomById(roomId);
+        if (!room || !isRoomMember(roomId, user.id)) return json(res, { error: 'Forbidden' }, 403);
+        markDmRead(user.id, roomId);
+        return json(res, { room, messages: getDmMessages(roomId), members: getRoomMembers(roomId) });
+      }
+      if (sub === 'messages' && m === 'POST') {
+        if (!user) return json(res, { error: 'Unauthorized' }, 401);
+        if (!isRoomMember(roomId, user.id)) return json(res, { error: 'Forbidden' }, 403);
+        const b = await readBody(req);
+        if (!b.content) return json(res, { error: 'content required' }, 400);
+        createDmMessage({ id: nanoid(), room_id: roomId, sender_user_id: user.id, character_id: b.character_id || null, content: b.content, created_at: now() });
+        markDmRead(user.id, roomId);
+        const members = getRoomMembers(roomId);
+        for (const mem of members) {
+          if (mem.user_id !== user.id) broadcast(mem.user_id, { type: 'dm', roomId, senderId: user.id, content: b.content.slice(0, 60) });
+        }
+        return json(res, { ok: true, messages: getDmMessages(roomId) });
+      }
+    }
+    if (path === '/api/dm/unread' && m === 'GET') {
       if (!user) return json(res, { error: 'Unauthorized' }, 401);
-      const room = getRoomById(roomId);
-      if (!room || room.created_by !== user.id) return json(res, { error: 'Forbidden' }, 403);
-      const b = await readBody(req);
-      if (b.user_id) addRoomMember({ room_id: roomId, user_id: b.user_id, character_id: b.character_id || null, joined_at: now() });
-      return json(res, { ok: true, members: getRoomMembers(roomId) });
+      return json(res, { count: getUnreadDmCount(user.id) });
     }
-  }
 
-  if (path === '/api/dm/unread' && m === 'GET') {
-    if (!user) return json(res, { error: 'Unauthorized' }, 401);
-    return json(res, { count: getUnreadDmCount(user.id) });
-  }
-
-  // ── Frontend (SPA fallback) ──
-  serveFile(res, join(__dirname, '../public/index.html'));
+    serveFile(res, join(__dirname, '../public/index.html'));
   } catch (err) {
     console.error('[서버 오류]', err);
     if (!res.headersSent) {
@@ -725,13 +658,8 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-// 전역 에러 핸들러 — 서버 크래시 방지
-process.on('uncaughtException', (err) => {
-  console.error('[uncaughtException]', err);
-});
-process.on('unhandledRejection', (reason) => {
-  console.error('[unhandledRejection]', reason);
-});
+process.on('uncaughtException', err => console.error('[uncaughtException]', err));
+process.on('unhandledRejection', reason => console.error('[unhandledRejection]', reason));
 
 server.listen(PORT, () => {
   console.log('\n🌟 Lorethread 서버 시작!');
