@@ -171,7 +171,8 @@ const server = http.createServer(async (req, res) => {
       if (!b.email || !b.password || !b.display_name) return json(res, { error: '모든 항목을 입력해주세요.' }, 400);
       if (await getUserByEmail(b.email)) return json(res, { error: '이미 사용 중인 이메일입니다.' }, 400);
       const db = getDb();
-      const isFirst = db.prepare('SELECT COUNT(*) as cnt FROM users').get().cnt === 0;
+      const { rows: _uf } = await pool.query('SELECT COUNT(*) as cnt FROM users');
+      const isFirst = parseInt(_uf[0]?.cnt||0) === 0;
       const role = isFirst ? 'owner' : 'member';
       const hash = await bcrypt.hash(b.password, 10);
       const id = nanoid();
@@ -229,23 +230,25 @@ const server = http.createServer(async (req, res) => {
 
     // ── 계정 전환 ──
     if (path === '/api/accounts' && m === 'GET') {
-      const db = getDb();
-      const sessions = db.prepare('SELECT DISTINCT user_id FROM sessions').all();
+      const pool = getDb();
+      const { rows: sessions } = await pool.query('SELECT DISTINCT user_id FROM sessions');
       const seen = new Set();
-      const accounts = sessions.map(s => {
+      const accounts = [];
+      for (const s of sessions) {
         const u = await getUser(s.user_id);
-        if (!u || seen.has(u.id)) return null;
+        if (!u || seen.has(u.id)) continue;
         seen.add(u.id);
-        return { user_id: u.id, display_name: u.display_name, email: u.email, role: u.role };
-      }).filter(Boolean);
+        accounts.push({ user_id: u.id, display_name: u.display_name, email: u.email, role: u.role });
+      }
       return json(res, { accounts });
     }
     if (path === '/api/accounts/switch' && m === 'POST') {
       const b = await readBody(req);
       const target = await getUser(b.user_id);
       if (!target) return json(res, { error: '계정을 찾을 수 없습니다.' }, 404);
-      const db = getDb();
-      let sess = db.prepare('SELECT * FROM sessions WHERE user_id = ? LIMIT 1').get(target.id);
+      const pool = getDb();
+      const { rows: sessRows } = await pool.query('SELECT * FROM sessions WHERE user_id = $1 LIMIT 1', [target.id]);
+      let sess = sessRows[0] || null;
       if (!sess) {
         const sid = nanoid(32);
         await createSession({ id: sid, user_id: target.id, created_at: now() });
@@ -261,7 +264,8 @@ const server = http.createServer(async (req, res) => {
       const b = await readBody(req);
       if (!b.code) return json(res, { error: '코드를 입력해주세요.' }, 400);
       const db = getDb();
-      const invite = db.prepare('SELECT * FROM invites WHERE code = ?').get(b.code);
+      const { rows: _inv } = await pool.query('SELECT * FROM invites WHERE code = $1', [b.code]);
+      const invite = _inv[0] || null;
       if (!invite) return json(res, { error: '유효하지 않은 초대 코드입니다.' }, 404);
       const targetWorld = await getWorldById(invite.world_id);
       if (!targetWorld) return json(res, { error: '세계관을 찾을 수 없습니다.' }, 404);
@@ -292,23 +296,23 @@ const server = http.createServer(async (req, res) => {
         if (!user || world.owner_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
         const db = getDb();
         // 관련 데이터 모두 삭제
-        const charIds = db.prepare('SELECT id FROM characters WHERE world_id = ?').all(world.id).map(c => c.id);
-        for (const cid of charIds) {
-          db.prepare('DELETE FROM char_sections WHERE character_id = ?').run(cid);
-          db.prepare('DELETE FROM char_links WHERE character_id = ?').run(cid);
+        const { rows: _chars } = await pool.query('SELECT id FROM characters WHERE world_id = $1', [world.id]);
+        for (const c of _chars) {
+          await pool.query('DELETE FROM char_sections WHERE character_id = $1', [c.id]);
+          await pool.query('DELETE FROM char_links WHERE character_id = $1', [c.id]);
         }
-        const postIds = db.prepare('SELECT id FROM posts WHERE world_id = ?').all(world.id).map(p => p.id);
-        for (const pid of postIds) {
-          db.prepare('DELETE FROM post_media WHERE post_id = ?').run(pid);
-          db.prepare('DELETE FROM reactions WHERE post_id = ?').run(pid);
+        const { rows: _posts } = await pool.query('SELECT id FROM posts WHERE world_id = $1', [world.id]);
+        for (const p of _posts) {
+          await pool.query('DELETE FROM post_media WHERE post_id = $1', [p.id]);
+          await pool.query('DELETE FROM reactions WHERE post_id = $1', [p.id]);
         }
-        db.prepare('DELETE FROM posts WHERE world_id = ?').run(world.id);
-        db.prepare('DELETE FROM characters WHERE world_id = ?').run(world.id);
-        db.prepare('DELETE FROM world_members WHERE world_id = ?').run(world.id);
-        db.prepare('DELETE FROM announcements WHERE world_id = ?').run(world.id);
-        db.prepare('DELETE FROM events WHERE world_id = ?').run(world.id);
-        db.prepare('DELETE FROM invites WHERE world_id = ?').run(world.id);
-        db.prepare('DELETE FROM worlds WHERE id = ?').run(world.id);
+        await pool.query('DELETE FROM posts WHERE world_id = $1', [world.id]);
+        await pool.query('DELETE FROM characters WHERE world_id = $1', [world.id]);
+        await pool.query('DELETE FROM world_members WHERE world_id = $1', [world.id]);
+        await pool.query('DELETE FROM announcements WHERE world_id = $1', [world.id]);
+        await pool.query('DELETE FROM events WHERE world_id = $1', [world.id]);
+        await pool.query('DELETE FROM invites WHERE world_id = $1', [world.id]);
+        await pool.query('DELETE FROM worlds WHERE id = $1', [world.id]);
         return json(res, { ok: true });
       }
 
@@ -335,10 +339,11 @@ const server = http.createServer(async (req, res) => {
       if (sub === 'invite' && m === 'POST') {
         if (!user || world?.owner_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
         const db = getDb();
-        const existing = db.prepare('SELECT * FROM invites WHERE world_id = ?').get(world.id);
+        const { rows: _existInv } = await pool.query('SELECT * FROM invites WHERE world_id = $1', [world.id]);
+        const existing = _existInv[0] || null;
         if (existing) return json(res, { ok: true, code: existing.code });
         const code = nanoid(10);
-        db.prepare('INSERT INTO invites (code,world_id,created_by,created_at) VALUES (?,?,?,?)').run(code, world.id, user.id, now());
+        await pool.query('INSERT INTO invites (code,world_id,created_by,created_at) VALUES ($1,$2,$3,$4)', [code, world.id, user.id, now()]);
         return json(res, { ok: true, code });
       }
 
@@ -364,7 +369,7 @@ const server = http.createServer(async (req, res) => {
         if (!world) return json(res, { error: 'Not found' }, 404);
         if (m === 'GET') {
           const db = getDb();
-          const events = db.prepare('SELECT * FROM events WHERE world_id = ? ORDER BY start_date ASC').all(world.id);
+          const { rows: events } = await pool.query('SELECT * FROM events WHERE world_id = $1 ORDER BY start_date ASC', [world.id]);
           return json(res, { events });
         }
         if (m === 'POST') {
@@ -372,8 +377,8 @@ const server = http.createServer(async (req, res) => {
           const b = await readBody(req);
           if (!b.title || !b.start_date || !b.end_date) return json(res, { error: '제목과 기간을 입력해주세요.' }, 400);
           const db = getDb();
-          db.prepare('INSERT INTO events (id,world_id,title,content,start_date,end_date,color,created_at) VALUES (?,?,?,?,?,?,?,?)')
-            .run(nanoid(), world.id, b.title, b.content||'', b.start_date, b.end_date, b.color||'#5865F2', now());
+          await pool.query('INSERT INTO events (id,world_id,title,content,start_date,end_date,color,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+            [nanoid(), world.id, b.title, b.content||'', b.start_date, b.end_date, b.color||'#5865F2', now());
           return json(res, { ok: true });
         }
       }
@@ -388,15 +393,21 @@ const server = http.createServer(async (req, res) => {
         if (!world) return json(res, { error: 'Not found' }, 404);
         const qs = new URL(req.url, `http://localhost:${PORT}`).searchParams;
         const offset = parseInt(qs.get('offset') || '0');
-        const myCharIds = user ? await getCharsByUser(user.id, world.id).map(c => c.id) : [];
-        const db = getDb();
-        const followingCharIds = db.prepare(
-          `SELECT following_character_id FROM follows WHERE follower_character_id IN (${myCharIds.map(()=>'?').join(',') || "''"})`)
-          .all(...myCharIds).map(f => f.following_character_id);
+        const _myChars = user ? await getCharsByUser(user.id, world.id) : [];
+        const myCharIds = _myChars.map(c => c.id);
+        const pool = getDb();
+        let followingCharIds = [];
+        if (myCharIds.length > 0) {
+          const { rows: _fc } = await pool.query(
+            'SELECT following_character_id FROM follows WHERE follower_character_id = ANY($1)', [myCharIds]);
+          followingCharIds = _fc.map(f => f.following_character_id);
+        }
         if (!followingCharIds.length) return json(res, { posts: [] });
-        const posts = await getPostsByWorld(world.id, 30, offset)
-          .filter(p => followingCharIds.includes(p.character_id))
-          .map(p => ({ ...p, userReacted: myCharIds.some(cid => !!await getReaction(p.id, cid)) }));
+        const _allPosts = await getPostsByWorld(world.id, 30, offset);
+        const posts = await Promise.all(
+          _allPosts.filter(p => followingCharIds.includes(p.character_id))
+            .map(async p => ({ ...p, userReacted: (await Promise.all(myCharIds.map(cid => getReaction(p.id, cid)))).some(Boolean) }))
+        );
         return json(res, { posts });
       }
 
@@ -471,7 +482,8 @@ const server = http.createServer(async (req, res) => {
         const qs = new URL(req.url, `http://localhost:${PORT}`).searchParams;
         const myCharId = qs.get('character_id');
         const db = getDb();
-        const following = !!db.prepare('SELECT 1 FROM follows WHERE follower_character_id = ? AND following_character_id = ?').get(myCharId, charId);
+        const { rows: _fol } = await pool.query('SELECT 1 FROM follows WHERE follower_character_id = $1 AND following_character_id = $2', [myCharId, charId]);
+        const following = _fol.length > 0;
         return json(res, { following });
       }
 
@@ -481,11 +493,12 @@ const server = http.createServer(async (req, res) => {
         const myChar = await getCharById(b.character_id);
         if (!myChar || myChar.user_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
         const db = getDb();
-        const existing = db.prepare('SELECT 1 FROM follows WHERE follower_character_id = ? AND following_character_id = ?').get(b.character_id, charId);
+        const { rows: _folEx } = await pool.query('SELECT 1 FROM follows WHERE follower_character_id = $1 AND following_character_id = $2', [b.character_id, charId]);
+        const existing = _folEx.length > 0;
         if (existing) {
-          db.prepare('DELETE FROM follows WHERE follower_character_id = ? AND following_character_id = ?').run(b.character_id, charId);
+          await pool.query('DELETE FROM follows WHERE follower_character_id = $1 AND following_character_id = $2', [b.character_id, charId]);
         } else {
-          db.prepare('INSERT OR IGNORE INTO follows (id,follower_character_id,following_character_id,created_at) VALUES (?,?,?,?)').run(nanoid(), b.character_id, charId, now());
+          await pool.query('INSERT INTO follows (id,follower_character_id,following_character_id,created_at) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING', [nanoid(), b.character_id, charId, now()]);
         }
         return json(res, { ok: true, followed: !existing, followerCount: await getFollowerCount(charId) });
       }
@@ -518,15 +531,15 @@ const server = http.createServer(async (req, res) => {
         if (!c) return json(res, { error: 'Not found' }, 404);
         if (c.user_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
         const db = getDb();
-        db.prepare('DELETE FROM char_sections WHERE character_id = ?').run(charId);
-        db.prepare('DELETE FROM char_links WHERE character_id = ?').run(charId);
-        const postIds = db.prepare('SELECT id FROM posts WHERE character_id = ?').all(charId).map(p => p.id);
-        for (const pid of postIds) {
-          db.prepare('DELETE FROM post_media WHERE post_id = ?').run(pid);
-          db.prepare('DELETE FROM reactions WHERE post_id = ?').run(pid);
+        await pool.query('DELETE FROM char_sections WHERE character_id = $1', [charId]);
+        await pool.query('DELETE FROM char_links WHERE character_id = $1', [charId]);
+        const { rows: _cposts } = await pool.query('SELECT id FROM posts WHERE character_id = $1', [charId]);
+        for (const p of _cposts) {
+          await pool.query('DELETE FROM post_media WHERE post_id = $1', [p.id]);
+          await pool.query('DELETE FROM reactions WHERE post_id = $1', [p.id]);
         }
-        db.prepare('DELETE FROM posts WHERE character_id = ?').run(charId);
-        db.prepare('DELETE FROM characters WHERE id = ?').run(charId);
+        await pool.query('DELETE FROM posts WHERE character_id = $1', [charId]);
+        await pool.query('DELETE FROM characters WHERE id = $1', [charId]);
         return json(res, { ok: true });
       }
     }
@@ -563,7 +576,8 @@ const server = http.createServer(async (req, res) => {
         if (b.content !== undefined) { updates.push('content = ?'); vals.push(b.content); }
         if (b.is_pinned !== undefined) { updates.push('is_pinned = ?'); vals.push(b.is_pinned ? 1 : 0); }
         updates.push('edited_at = ?'); vals.push(now());
-        db.prepare(`UPDATE posts SET ${updates.join(', ')} WHERE id = ?`).run(...vals, postId);
+        const setParts = updates.map((u, i) => u.replace('?', `$${i+1}`));
+        await pool.query(`UPDATE posts SET ${setParts.join(', ')} WHERE id = $${vals.length+1}`, [...vals, postId]);
         return json(res, { ok: true, post: await getPostById(postId) });
       }
 
