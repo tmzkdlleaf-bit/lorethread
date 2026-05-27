@@ -3626,12 +3626,19 @@ async function uploadWorldIcon(e) {
   const d = await r.json();
   if (d.urls?.[0]) {
     currentWorld.icon_image_url = d.urls[0];
+    // 서버에 즉시 저장
+    await api('PATCH', `/api/worlds/${encodeURIComponent(currentWorld.slug)}`, { icon_image_url: d.urls[0] });
     // 배너 로고 업데이트
     const logo = document.getElementById('banner-logo');
     if (logo) logo.innerHTML = `<img src="${d.urls[0]}" style="width:100%;height:100%;object-fit:cover;border-radius:8px" alt="">`;
-    // 탭 아이콘 업데이트
+    // 미리보기 박스 업데이트
+    const preview = document.getElementById('icon-preview-box');
+    if (preview) preview.innerHTML = `<img src="${d.urls[0]}" style="width:100%;height:100%;object-fit:cover;border-radius:9px" alt="">`;
+    // 사이드바 탭 업데이트
+    const idx = appWorlds.findIndex(w => w.id === currentWorld.id);
+    if (idx >= 0) appWorlds[idx] = { ...appWorlds[idx], icon_image_url: d.urls[0] };
     renderWorldTabs();
-    toast('아이콘이 업로드됐습니다');
+    toast('아이콘이 저장됐습니다 ✓');
   }
 }
 
