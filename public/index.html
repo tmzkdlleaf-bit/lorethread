@@ -2198,7 +2198,7 @@ function renderPost(p, isReply = false) {
           <div class="post-char-strip">
             <span class="post-charname" onclick="openCharProfile('${p.character_id}');event.stopPropagation()">${p.char_name}</span>
             <span class="post-handle">@${p.char_handle}</span>
-            <span class="char-owner-tag ${p.user_id===appUser?.id?'mine':''}">${p.user_id===appUser?.id?'나':''}</span>
+            
             <span class="post-time" style="margin-left:auto">${p.edited_at ? '<span style="font-size:10px;color:var(--text3);margin-right:3px">(수정됨)</span>' : ''}${relativeTime(p.created_at)}</span>
           </div>
         </div>
@@ -2656,7 +2656,7 @@ function renderCharsGrid() {
       <div class="char-card-body">
         <div class="char-card-name">${c.name}</div>
         <div class="char-card-role">${c.role||'역할 없음'}</div>
-        <div class="char-card-player">${c.user_id===appUser?.id?'<i class="ti ti-user" style="font-size:10px"></i> 나':''}</div>
+        <div class="char-card-player"></div>
       </div>
       <div class="char-card-footer">
         <span class="char-card-posts">${c.is_npc?'NPC':'캐릭터'}</span>
@@ -4422,7 +4422,7 @@ function renderCharsStandalone(q = '') {
       <div class="char-card-body">
         <div class="char-card-name">${c.name}</div>
         <div class="char-card-role">${c.role||'역할 없음'}</div>
-        <div class="char-card-player">${c.user_id===appUser?.id?'<i class="ti ti-user" style="font-size:10px"></i> 나':''}</div>
+        <div class="char-card-player"></div>
       </div>
       <div class="char-card-footer">
         <span class="char-card-posts">${c.is_npc?'NPC':'캐릭터'}</span>
