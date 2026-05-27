@@ -376,9 +376,9 @@ const server = http.createServer(async (req, res) => {
           if (!user || world.owner_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
           const b = await readBody(req);
           if (!b.title || !b.start_date || !b.end_date) return json(res, { error: '제목과 기간을 입력해주세요.' }, 400);
-          const db = getDb();
+          const pool = getDb();
           await pool.query('INSERT INTO events (id,world_id,title,content,start_date,end_date,color,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
-            [nanoid(), world.id, b.title, b.content||'', b.start_date, b.end_date, b.color||'#5865F2', now());
+            [nanoid(), world.id, b.title, b.content||'', b.start_date, b.end_date, b.color||'#5865F2', now()]);
           return json(res, { ok: true });
         }
       }
