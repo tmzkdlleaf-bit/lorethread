@@ -136,8 +136,11 @@ const server = http.createServer(async (req, res) => {
     const path = decodeURIComponent(rawPath);
     const m = req.method;
 
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    const allowedOrigin = process.env.FRONTEND_URL || 'http://localhost:3000';
+    res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
     if (m === 'OPTIONS') { res.writeHead(204); return res.end(); }
 
     if (rawPath.startsWith('/static/')) return serveFile(res, join(__dirname, '../public', rawPath));
@@ -168,7 +171,7 @@ const server = http.createServer(async (req, res) => {
       await createUser({ id, email: b.email, password_hash: hash, display_name: b.display_name, role, theme: 'light', created_at: now() });
       const sid = nanoid(32);
       await createSession({ id: sid, user_id: id, created_at: now() });
-      res.setHeader('Set-Cookie', `session=${sid}; Path=/; HttpOnly; Max-Age=2592000`);
+      res.setHeader('Set-Cookie', `session=${sid}; Path=/; HttpOnly; Max-Age=2592000; SameSite=None; Secure`);
       return json(res, { ok: true, user: { id, email: b.email, display_name: b.display_name, role } });
     }
 
@@ -178,14 +181,14 @@ const server = http.createServer(async (req, res) => {
       if (!u || !(await bcrypt.compare(b.password, u.password_hash))) return json(res, { error: '이메일 또는 비밀번호가 올바르지 않습니다.' }, 401);
       const sid = nanoid(32);
       await createSession({ id: sid, user_id: u.id, created_at: now() });
-      res.setHeader('Set-Cookie', `session=${sid}; Path=/; HttpOnly; Max-Age=2592000`);
+      res.setHeader('Set-Cookie', `session=${sid}; Path=/; HttpOnly; Max-Age=2592000; SameSite=None; Secure`);
       return json(res, { ok: true, user: { id: u.id, email: u.email, display_name: u.display_name, role: u.role } });
     }
 
     if (path === '/api/auth/logout' && m === 'POST') {
       const cookies = parseCookie(req.headers.cookie || '');
       if (cookies.session) await deleteSession(cookies.session);
-      res.setHeader('Set-Cookie', 'session=; Path=/; Max-Age=0');
+      res.setHeader('Set-Cookie', 'session=; Path=/; Max-Age=0; SameSite=None; Secure');
       return json(res, { ok: true });
     }
 
@@ -239,7 +242,7 @@ const server = http.createServer(async (req, res) => {
         await createSession({ id: sid, user_id: target.id, created_at: now() });
         sess = { id: sid };
       }
-      res.setHeader('Set-Cookie', `session=${sess.id}; Path=/; HttpOnly; Max-Age=2592000`);
+      res.setHeader('Set-Cookie', `session=${sess.id}; Path=/; HttpOnly; Max-Age=2592000; SameSite=None; Secure`);
       return json(res, { ok: true, user: { id: target.id, email: target.email, display_name: target.display_name, role: target.role } });
     }
 
