@@ -1,3 +1,5 @@
-[deploy]
-startCommand = "node src/server.js"
-restartPolicyType = "ON_FAILURE"
+[build] 
+buildCommand = "npm install" 
+[deploy] 
+startCommand = "node src/server.js" 
+restartPolicyType = "ON_FAILURE" 
