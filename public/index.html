@@ -2175,13 +2175,8 @@ function openAccountModal() {
 // ─── Media ───
 async function handleMediaSelect(e) {
   const files = Array.from(e.target.files).slice(0, 4 - pendingMediaUrls.length);
-  for (const file of files) {
-    const form = new FormData();
-    form.append('file', file);
-    const res = await fetch('/api/upload', { method: 'POST', body: form });
-    const data = await res.json();
-    if (data.urls) pendingMediaUrls.push(...data.urls);
-  }
+  const urls = await uploadFiles(files);
+  pendingMediaUrls.push(...urls);
   renderMediaPreview();
   e.target.value = '';
 }
@@ -2906,7 +2901,37 @@ function insertText(t) {
   ta.focus(); ta.setSelectionRange(pos+1, pos+1);
 }
 
-// ─── 멘션 자동완성 ───
+// ── 이미지 압축 후 업로드 ──
+async function compressImage(file, maxWidth = 1920, quality = 0.85) {
+  if (!file.type.startsWith('image/') || file.type === 'image/gif') return file;
+  return new Promise(resolve => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, maxWidth / img.width);
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width * scale;
+      canvas.height = img.height * scale;
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob(blob => resolve(new File([blob], file.name, { type: 'image/jpeg' })), 'image/jpeg', quality);
+    };
+    img.src = url;
+  });
+}
+
+async function uploadFiles(files) {
+  const urls = [];
+  for (const file of files) {
+    const compressed = await compressImage(file);
+    const form = new FormData();
+    form.append('file', compressed);
+    const res = await fetch('/api/upload', { method: 'POST', body: form });
+    const data = await res.json();
+    if (data.urls?.[0]) urls.push(data.urls[0]);
+  }
+  return urls;
+}
 let _mentionTarget = null;
 
 function handleMentionInput(ta) {
@@ -2975,14 +3000,11 @@ function insertMention(handle, trigger) {
 
 async function handleComposeDrop(e) {
   e.preventDefault();
-  const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/') || f.type.startsWith('video/'));
+  const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/') || f.type.startsWith('video/')).slice(0, 4 - pendingMediaUrls.length);
   if (!files.length) return;
-  for (const file of files.slice(0, 4 - pendingMediaUrls.length)) {
-    const form = new FormData(); form.append('file', file);
-    const res = await fetch('/api/upload', { method:'POST', body:form });
-    const data = await res.json();
-    if (data.urls?.[0]) { pendingMediaUrls.push(data.urls[0]); renderMediaPreview(); }
-  }
+  const urls = await uploadFiles(files);
+  pendingMediaUrls.push(...urls);
+  renderMediaPreview();
   toast('이미지가 첨부됐습니다 🖼');
 }
 
@@ -2992,10 +3014,10 @@ async function handleComposePaste(e) {
   if (!imageItem) return;
   e.preventDefault();
   const file = imageItem.getAsFile();
-  const form = new FormData(); form.append('file', file);
-  const res = await fetch('/api/upload', { method:'POST', body:form });
-  const data = await res.json();
-  if (data.urls?.[0]) { pendingMediaUrls.push(data.urls[0]); renderMediaPreview(); toast('이미지가 붙여넣기 됐습니다 📋'); }
+  const urls = await uploadFiles([file]);
+  pendingMediaUrls.push(...urls);
+  renderMediaPreview();
+  toast('이미지가 붙여넣기 됐습니다 📋');
 }
 
 function handleComposeKeydown(e) {

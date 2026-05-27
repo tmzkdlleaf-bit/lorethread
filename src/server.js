@@ -81,7 +81,15 @@ async function readMultipart(req) {
             const tmpPath = join(UPLOADS_DIR, nanoid() + ext);
             writeFileSync(tmpPath, data);
             try {
-              const result = await cloudinary.uploader.upload(tmpPath, { folder: 'lorethread', resource_type: 'auto' });
+              const result = await cloudinary.uploader.upload(tmpPath, {
+                folder: 'lorethread',
+                resource_type: 'auto',
+                transformation: [
+                  { width: 1920, crop: 'limit' },  // 최대 1920px로 축소
+                  { quality: 'auto:good' },          // 화질 자동 최적화
+                  { fetch_format: 'auto' },           // WebP 등 최적 포맷 자동 선택
+                ],
+              });
               uploads.push({ url: result.secure_url });
             } finally {
               try { unlinkSync(tmpPath); } catch {}
