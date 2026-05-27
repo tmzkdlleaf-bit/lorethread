@@ -905,18 +905,18 @@ input, textarea { font-family: var(--sans); color: var(--text); }
 
       <!-- ── 캐릭터 독립 뷰 ── -->
       <div id="view-chars-standalone" style="display:none">
-        <div style="padding:13px 16px;border-bottom:1px solid var(--border);background:var(--bg2);position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between">
+        <div style="padding:12px 16px;border-bottom:1px solid var(--border);background:var(--bg2);position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between">
           <span style="font-size:15px;font-weight:500">캐릭터 <span id="char-count-standalone" style="color:var(--text3);font-weight:400;font-size:13px"></span></span>
           <button class="btn btn-ghost" style="font-size:12px" onclick="openNewCharModal()"><i class="ti ti-user-plus"></i> 등록</button>
         </div>
         <div style="display:flex;height:calc(100vh - 50px)">
           <!-- 왼쪽: 캐릭터 그리드 -->
-          <div style="flex:1;overflow-y:auto">
-            <div class="chars-search-bar" style="margin:10px 16px 0"><i class="ti ti-search" style="color:var(--text3)"></i><input id="char-search-standalone" type="text" placeholder="이름, 역할, 핸들..." oninput="filterCharsStandalone()"></div>
+          <div style="flex:1;overflow-y:auto;min-width:0">
+            <div class="chars-search-bar" style="margin:12px 16px 0"><i class="ti ti-search" style="color:var(--text3)"></i><input id="char-search-standalone" type="text" placeholder="이름, 역할, 핸들..." oninput="filterCharsStandalone()"></div>
             <div style="padding:10px 16px"><div class="chars-grid" id="chars-grid-standalone"></div></div>
           </div>
           <!-- 오른쪽: 캐릭터 상세 패널 -->
-          <div id="char-detail-panel" style="display:none;width:320px;flex-shrink:0;border-left:1px solid var(--border);overflow-y:auto;background:var(--bg2);display:flex;flex-direction:column"></div>
+          <div id="char-detail-panel" style="display:none;width:320px;flex-shrink:0;border-left:1px solid var(--border);overflow-y:auto;background:var(--bg2);flex-direction:column"></div>
         </div>
       </div>
 
@@ -1345,16 +1345,32 @@ async function toggleTheme() {
 
 // ─── Accent Color ───
 const ACCENT_PRESETS = [
-  {name:'블루',    light:'#2b5ce6', dark:'#6b8ef0', bg_l:'#eef2fd', bg_d:'#1a2240'},
-  {name:'바이올렛',light:'#7c3aed', dark:'#a78bfa', bg_l:'#f3effe', bg_d:'#1e1635'},
-  {name:'핑크',   light:'#db2777', dark:'#f472b6', bg_l:'#fce7f3', bg_d:'#2d1525'},
-  {name:'레드',   light:'#dc2626', dark:'#f87171', bg_l:'#fee2e2', bg_d:'#2d1515'},
-  {name:'오렌지', light:'#d97706', dark:'#fbbf24', bg_l:'#fef3c7', bg_d:'#2d1f0a'},
-  {name:'그린',   light:'#059669', dark:'#34d399', bg_l:'#d1fae5', bg_d:'#0d2d1e'},
-  {name:'틸',     light:'#0891b2', dark:'#22d3ee', bg_l:'#cffafe', bg_d:'#0a2030'},
-  {name:'슬레이트',light:'#475569', dark:'#94a3b8', bg_l:'#f1f5f9', bg_d:'#1a1f2e'},
+  {name:'블루',      light:'#2b5ce6', dark:'#6b8ef0', bg_l:'#eef2fd', bg_d:'#1a2240'},
+  {name:'바이올렛',  light:'#7c3aed', dark:'#a78bfa', bg_l:'#f3effe', bg_d:'#1e1635'},
+  {name:'핑크',     light:'#db2777', dark:'#f472b6', bg_l:'#fce7f3', bg_d:'#2d1525'},
+  {name:'레드',     light:'#dc2626', dark:'#f87171', bg_l:'#fee2e2', bg_d:'#2d1515'},
+  {name:'오렌지',   light:'#d97706', dark:'#fbbf24', bg_l:'#fef3c7', bg_d:'#2d1f0a'},
+  {name:'그린',     light:'#059669', dark:'#34d399', bg_l:'#d1fae5', bg_d:'#0d2d1e'},
+  {name:'틸',       light:'#0891b2', dark:'#22d3ee', bg_l:'#cffafe', bg_d:'#0a2030'},
+  {name:'슬레이트', light:'#475569', dark:'#94a3b8', bg_l:'#f1f5f9', bg_d:'#1a1f2e'},
+  {name:'파스텔블루',  light:'#7ba7d4', dark:'#93bde0', bg_l:'#e8f2fb', bg_d:'#162030'},
+  {name:'파스텔퍼플', light:'#a78ec7', dark:'#bba5d8', bg_l:'#f1ecf9', bg_d:'#1e1630'},
+  {name:'파스텔핑크', light:'#d47fa8', dark:'#e09abb', bg_l:'#faedf4', bg_d:'#2d1525'},
+  {name:'파스텔민트', light:'#5db8a0', dark:'#7dcfba', bg_l:'#e4f7f3', bg_d:'#0d2820'},
+  {name:'파스텔오렌지',light:'#d4956a', dark:'#e0aa85', bg_l:'#faf0e8', bg_d:'#2a1a0a'},
+  {name:'파스텔라벤더',light:'#9b8ec4', dark:'#b3a8d8', bg_l:'#f0edf9', bg_d:'#1c1530'},
 ];
 let _currentAccentIdx = parseInt(localStorage.getItem('accentIdx') || '0');
+
+function applyCustomAccent(hex) {
+  _currentAccentIdx = -1;
+  localStorage.setItem('accentIdx', '-1');
+  localStorage.setItem('accentCustom', hex);
+  // 밝기 계산해서 bg색 자동 생성
+  const bg = hex + '20';
+  document.documentElement.style.setProperty('--accent', hex);
+  document.documentElement.style.setProperty('--accent-bg', bg);
+}
 
 function applyAccent(idx) {
   _currentAccentIdx = idx;
@@ -1377,7 +1393,12 @@ function renderAccentPicker() {
   }).join('');
 }
 // 초기 강조색
-applyAccent(_currentAccentIdx);
+if (_currentAccentIdx === -1) {
+  const custom = localStorage.getItem('accentCustom');
+  if (custom) applyCustomAccent(custom);
+} else {
+  applyAccent(_currentAccentIdx);
+}
 
 // ─── Auth ───
 function showRegister() { document.getElementById('auth-login-form').style.display='none'; document.getElementById('auth-register-form').style.display='block'; }
@@ -3062,17 +3083,18 @@ function renderPersonalPanel() {
         </div>
       </div>
       <div class="field"><label>강조 색상</label>
-        <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:4px" id="ps-accent-row">
-          ${[0,1,2,3,4,5,6,7,8,9].map(i => {
+        <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:4px;align-items:center">
+          ${ACCENT_PRESETS.map((p, i) => {
             const isDark = document.documentElement.getAttribute('data-theme')==='dark';
-            const palettes = [
-              {l:'#2B5CE6',d:'#4d7fff'},{l:'#534AB7',d:'#7b72d4'},{l:'#0F6E56',d:'#1da882'},
-              {l:'#993C1D',d:'#d4622e'},{l:'#993556',d:'#d44d7a'},{l:'#3B6D11',d:'#5ea81a'},
-              {l:'#854F0B',d:'#c47a1a'},{l:'#1a6b8a',d:'#2da8d4'},{l:'#444441',d:'#888885'},{l:'#8B1A1A',d:'#c43030'}
-            ];
-            const col = isDark ? palettes[i].d : palettes[i].l;
-            return `<div title="색상 ${i+1}" onclick="applyAccent(${i})" style="width:24px;height:24px;border-radius:50%;background:${col};cursor:pointer;border:${_currentAccentIdx===i?'3px solid var(--text)':'2px solid transparent'};flex-shrink:0;transition:transform .1s" onmouseover="this.style.transform='scale(1.15)'" onmouseout="this.style.transform=''"></div>`;
+            const col = isDark ? p.dark : p.light;
+            const sel = _currentAccentIdx === i;
+            return `<div title="${p.name}" onclick="applyAccent(${i});renderPersonalPanel()" style="width:24px;height:24px;border-radius:50%;background:${col};cursor:pointer;border:${sel?'3px solid var(--text)':'2px solid transparent'};flex-shrink:0;transition:transform .1s" onmouseover="this.style.transform='scale(1.15)'" onmouseout="this.style.transform=''"></div>`;
           }).join('')}
+          <label title="직접 색상 고르기" style="position:relative;cursor:pointer" onmouseenter="this.querySelector('span').style.opacity='1'" onmouseleave="this.querySelector('span').style.opacity='0'">
+            <div style="width:24px;height:24px;border-radius:50%;background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red);border:2px solid var(--border2);cursor:pointer;flex-shrink:0"></div>
+            <span style="position:absolute;bottom:-18px;left:50%;transform:translateX(-50%);font-size:10px;color:var(--text3);white-space:nowrap;opacity:0;transition:opacity .15s;pointer-events:none">직접 선택</span>
+            <input type="color" value="${document.documentElement.style.getPropertyValue('--accent')||'#2b5ce6'}" style="position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%" oninput="applyCustomAccent(this.value)">
+          </label>
         </div>
       </div>
     </div>
@@ -3986,7 +4008,7 @@ async function openCharDetail(charId) {
     </div>
 
     <!-- 본문 -->
-    <div style="padding:38px 16px 16px;overflow-y:auto">
+    <div style="padding:40px 16px 20px;overflow-y:auto">
       <!-- 이름/역할 + 버튼 -->
       <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px">
         <div>
