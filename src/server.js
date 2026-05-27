@@ -150,6 +150,36 @@ function makeSlug(name) {
   return name.trim().replace(/\s+/g, '-').replace(/[^\w\-가-힣]/g, '').toLowerCase().slice(0, 40) + '-' + nanoid(4);
 }
 
+// ── Rate Limiter ──
+const _rl = new Map();
+function rateLimit(key, maxReq, windowMs) {
+  const now = Date.now();
+  const entry = _rl.get(key) || { count: 0, start: now };
+  if (now - entry.start > windowMs) { entry.count = 1; entry.start = now; }
+  else entry.count++;
+  _rl.set(key, entry);
+  // 오래된 항목 정리 (메모리 누수 방지)
+  if (_rl.size > 10000) {
+    for (const [k, v] of _rl) { if (now - v.start > windowMs * 2) _rl.delete(k); }
+  }
+  return entry.count > maxReq;
+}
+function getIp(req) {
+  return (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+}
+
+// ── Keep-alive (Railway sleep 방지) ──
+// 프로덕션에서 4분마다 자기 자신에게 ping
+if (process.env.NODE_ENV === 'production' || process.env.RAILWAY_ENVIRONMENT) {
+  setInterval(async () => {
+    try {
+      const url = `http://localhost:${process.env.PORT || 3000}/health`;
+      const r = await fetch(url);
+      console.log(`[keep-alive] ${new Date().toISOString()} ${r.status}`);
+    } catch (e) { console.warn('[keep-alive] ping 실패:', e.message); }
+  }, 4 * 60 * 1000);
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     const rawPath = req.url.split('?')[0];
@@ -162,6 +192,18 @@ const server = http.createServer(async (req, res) => {
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
     if (m === 'OPTIONS') { res.writeHead(204); return res.end(); }
+
+    // ── 헬스체크 ──
+    if (path === '/health') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true, ts: Date.now() }));
+    }
+
+    // ── 전체 API rate limit (IP당 120회/분) ──
+    const ip = getIp(req);
+    if (path.startsWith('/api/') && rateLimit(`api:${ip}`, 120, 60000)) {
+      return json(res, { error: '요청이 너무 많습니다. 잠시 후 다시 시도해주세요.' }, 429);
+    }
 
     if (rawPath.startsWith('/static/')) return serveFile(res, join(__dirname, '../public', rawPath));
 
@@ -180,6 +222,8 @@ const server = http.createServer(async (req, res) => {
 
     // ── Auth ──
     if (path === '/api/auth/register' && m === 'POST') {
+      // 회원가입: IP당 5회/10분
+      if (rateLimit(`reg:${ip}`, 5, 600000)) return json(res, { error: '잠시 후 다시 시도해주세요.' }, 429);
       const b = await readBody(req);
       if (!b.email || !b.password || !b.display_name) return json(res, { error: '모든 항목을 입력해주세요.' }, 400);
       if (await getUserByEmail(b.email)) return json(res, { error: '이미 사용 중인 이메일입니다.' }, 400);
@@ -196,6 +240,8 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (path === '/api/auth/login' && m === 'POST') {
+      // 로그인: IP당 10회/분 (브루트포스 방어)
+      if (rateLimit(`login:${ip}`, 10, 60000)) return json(res, { error: '로그인 시도가 너무 많습니다. 1분 후 다시 시도해주세요.' }, 429);
       const b = await readBody(req);
       const u = await getUserByEmail(b.email);
       if (!u || !(await bcrypt.compare(b.password, u.password_hash))) return json(res, { error: '이메일 또는 비밀번호가 올바르지 않습니다.' }, 401);
@@ -446,6 +492,8 @@ const server = http.createServer(async (req, res) => {
         }
         if (m === 'POST') {
           if (!user) return json(res, { error: 'Unauthorized' }, 401);
+          // 포스트 도배 방지: 유저당 20회/분
+          if (rateLimit(`post:${user.id}`, 20, 60000)) return json(res, { error: '너무 빠르게 게시글을 작성하고 있습니다.' }, 429);
           const b = await readBody(req);
           if (!b.content && !b.media_urls?.length) return json(res, { error: '내용을 입력해주세요.' }, 400);
           if (!b.character_id) return json(res, { error: '캐릭터를 선택해주세요.' }, 400);

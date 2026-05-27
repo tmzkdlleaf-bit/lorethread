@@ -1257,6 +1257,43 @@ input, textarea { font-family: var(--sans); color: var(--text); }
 <script>
 window.API_BASE = 'https://lorethread-production.up.railway.app';
 
+// ── 전역 에러 핸들러 ──
+window.addEventListener('error', e => {
+  console.error('[전역 오류]', e.error);
+});
+window.addEventListener('unhandledrejection', e => {
+  console.error('[처리되지 않은 Promise 오류]', e.reason);
+  // 네트워크 오류는 토스트로 표시
+  if (e.reason instanceof TypeError && e.reason.message.includes('fetch')) {
+    showErrorToast('서버에 연결할 수 없습니다. 잠시 후 다시 시도해주세요.');
+  }
+});
+
+// ── 오프라인 감지 ──
+window.addEventListener('offline', () => showErrorToast('인터넷 연결이 끊겼습니다.'));
+window.addEventListener('online', () => {
+  const t = document.getElementById('error-toast');
+  if (t) t.style.display = 'none';
+  showToastMsg('다시 연결됐습니다.');
+});
+
+function showErrorToast(msg) {
+  let t = document.getElementById('error-toast');
+  if (!t) {
+    t = document.createElement('div');
+    t.id = 'error-toast';
+    t.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#dc2626;color:white;padding:10px 18px;border-radius:20px;font-size:13px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,.2);text-align:center;max-width:320px';
+    document.body.appendChild(t);
+  }
+  t.textContent = msg;
+  t.style.display = 'block';
+  setTimeout(() => { if (t) t.style.display = 'none'; }, 4000);
+}
+function showToastMsg(msg) {
+  const el = document.getElementById('toast');
+  if (el) { el.textContent = msg; el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 2500); }
+}
+
 // ─── State ───
 let appUser = null;
 let appWorlds = [];
@@ -1330,8 +1367,28 @@ const API_BASE = window.API_BASE || '';
 async function api(method, path, body) {
   const opts = { method, headers: {}, credentials: 'include' };
   if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
-  const res = await fetch(API_BASE + path, opts);
-  return res.json();
+  try {
+    const res = await fetch(API_BASE + path, opts);
+    if (res.status === 429) {
+      const data = await res.json().catch(() => ({}));
+      showErrorToast(data.error || '요청이 너무 많습니다. 잠시 후 다시 시도해주세요.');
+      return { error: 'rate_limited' };
+    }
+    if (res.status === 500) {
+      showErrorToast('서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
+      return { error: 'server_error' };
+    }
+    if (res.status === 401 && path !== '/api/auth/me') {
+      // 세션 만료
+      if (appUser) { appUser = null; showPage('page-auth'); showErrorToast('로그인이 만료됐습니다. 다시 로그인해주세요.'); }
+      return { error: 'unauthorized' };
+    }
+    return res.json();
+  } catch (e) {
+    if (!navigator.onLine) showErrorToast('인터넷 연결을 확인해주세요.');
+    else showErrorToast('서버에 연결할 수 없습니다.');
+    return { error: 'network_error' };
+  }
 }
 
 // ─── Toast ───
@@ -1977,7 +2034,7 @@ function renderPost(p, isReply = false) {
           <div class="post-char-strip">
             <span class="post-charname" onclick="openCharProfile('${p.character_id}');event.stopPropagation()">${p.char_name}</span>
             <span class="post-handle">@${p.char_handle}</span>
-            <span class="char-owner-tag ${p.user_id===appUser?.id?'mine':''}">${p.user_id===appUser?.id?'나':p.player_name||''}</span>
+            <span class="char-owner-tag ${p.user_id===appUser?.id?'mine':''}">${p.user_id===appUser?.id?'나':''}</span>
             <span class="post-time" style="margin-left:auto">${p.edited_at ? '<span style="font-size:10px;color:var(--text3);margin-right:3px">(수정됨)</span>' : ''}${relativeTime(p.created_at)}</span>
           </div>
         </div>
@@ -2382,7 +2439,7 @@ function renderCharsGrid() {
       <div class="char-card-body">
         <div class="char-card-name">${c.name}</div>
         <div class="char-card-role">${c.role||'역할 없음'}</div>
-        <div class="char-card-player"><i class="ti ti-user" style="font-size:10px"></i> ${c.player_name||''}</div>
+        <div class="char-card-player">${c.user_id===appUser?.id?'<i class="ti ti-user" style="font-size:10px"></i> 나':''}</div>
       </div>
       <div class="char-card-footer">
         <span class="char-card-posts">${c.is_npc?'NPC':'캐릭터'}</span>
@@ -2444,7 +2501,7 @@ function renderCharProfile(c, posts, followers, following) {
       </div>
       <div class="char-profile-name">${c.name}</div>
       <div class="char-profile-role">${c.role||''}</div>
-      <div class="char-profile-player"><i class="ti ti-user" style="font-size:11px"></i> ${c.player_name||''} · @${c.handle}</div>
+      <div class="char-profile-player"><i class="ti ti-user" style="font-size:11px"></i> @${c.handle}</div>
       <div class="char-profile-stats">
         <div class="char-profile-stat"><div class="char-profile-stat-n">${posts?.length||0}</div><div class="char-profile-stat-l">포스트</div></div>
         <div class="char-profile-stat"><div class="char-profile-stat-n" id="follower-count-${c.id}">${followers||0}</div><div class="char-profile-stat-l">팔로워</div></div>
@@ -3674,7 +3731,7 @@ async function loadDmRooms(filter = 'all') {
   el.innerHTML = filtered.map(rm => {
     const isGroup = rm.type === 'group';
     const otherMembers = (rm.members || []).filter(m => m.user_id !== appUser?.id);
-    const displayName = isGroup ? (rm.name || '그룹 대화') : (otherMembers[0]?.display_name || '1:1 대화');
+    const displayName = isGroup ? (rm.name || '그룹 대화') : (otherMembers[0]?.char_name || '1:1 대화');
     const avLetter = displayName[0]?.toUpperCase() || '?';
     // 상대방 캐릭터 아바타 사용
     const otherChar = !isGroup && otherMembers[0];
@@ -3727,10 +3784,10 @@ async function openRoom(roomId) {
   av.style.color = isGroup ? 'var(--accent)' : 'var(--text2)';
   // 상대방 이름 표시
   const otherMembers = members.filter(m => m.user_id !== appUser?.id);
-  const displayName = isGroup ? (room.name || '그룹 대화') : (otherMembers[0]?.display_name || '1:1 대화');
+  const displayName = isGroup ? (room.name || '그룹 대화') : (otherMembers[0]?.char_name || '1:1 대화');
   av.textContent = displayName[0]?.toUpperCase() || '?';
   document.getElementById('dm-chat-name').textContent = displayName;
-  document.getElementById('dm-chat-members').textContent = members.map(m => m.display_name).join(', ');
+  document.getElementById('dm-chat-members').textContent = members.map(m => m.char_name || m.display_name).join(', ');
 
   // 내 캐릭터 선택 (select 방식)
   const charSel = document.getElementById('dm-char-selector');
@@ -3811,7 +3868,7 @@ async function loadDmMessages() {
     html += `<div class="dm-msg${isMine?' mine':''}${isCont?' cont':''}" style="margin-bottom:${isNextSame?'1':'6'}px">
       <div class="dm-msg-av" style="background:${avBg};color:${avFg}">${avContent}</div>
       <div class="dm-msg-body">
-        ${!isCont && !isMine ? `<div class="dm-msg-sender">${char}${msg.display_name&&msg.char_name?` · ${msg.display_name}`:''}</div>` : ''}
+        ${!isCont && !isMine ? `<div class="dm-msg-sender">${char}</div>` : ''}
         <div class="dm-msg-bubble">${msg.content.replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>')}</div>
         ${!isNextSame ? `<div class="dm-msg-time">${timeStr}</div>` : ''}
       </div>
@@ -3863,8 +3920,8 @@ function openNewRoomModal() {
     } else {
       el.innerHTML = members.map(m => `
         <div class="member-chip" onclick="toggleMember('${m.id}',this)">
-          <div class="member-chip-av" style="background:var(--accent-bg);color:var(--accent)">${m.display_name[0]}</div>
-          <span>${m.display_name}</span>
+          <div class="member-chip-av" style="background:var(--accent-bg);color:var(--accent)">${m.char_name?m.char_name[0]:m.display_name[0]}</div>
+          <span>${m.char_name || m.display_name}</span>
         </div>`).join('');
     }
   });
@@ -3970,7 +4027,7 @@ function renderCharsStandalone(q = '') {
       <div class="char-card-body">
         <div class="char-card-name">${c.name}</div>
         <div class="char-card-role">${c.role||'역할 없음'}</div>
-        <div class="char-card-player"><i class="ti ti-user" style="font-size:10px"></i> ${c.player_name||''}</div>
+        <div class="char-card-player">${c.user_id===appUser?.id?'<i class="ti ti-user" style="font-size:10px"></i> 나':''}</div>
       </div>
       <div class="char-card-footer">
         <span class="char-card-posts">${c.is_npc?'NPC':'캐릭터'}</span>
@@ -4023,7 +4080,7 @@ async function openCharDetail(charId) {
         <div>
           <div style="font-size:17px;font-weight:600;font-family:var(--serif)">${c.name}</div>
           <div style="font-size:12px;color:var(--text2);margin-top:2px">${c.role||''}</div>
-          <div style="font-size:11px;color:var(--text3);margin-top:1px">@${c.handle} · <i class="ti ti-user" style="font-size:10px"></i> ${c.player_name||''}</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:1px">@${c.handle}</div>
         </div>
         ${isOwn
           ? `<button class="btn btn-ghost" style="font-size:12px" onclick="editChar('${c.id}')"><i class="ti ti-edit"></i> 편집</button>`
