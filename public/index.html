@@ -227,7 +227,7 @@ input, textarea { font-family: var(--sans); color: var(--text); }
 .post-charname:hover { text-decoration: underline; }
 .post-handle { font-size: 11px; color: var(--text3); }
 .post-time { font-size: 11px; color: var(--text3); margin-left: auto; white-space: nowrap; }
-.post-body { margin-top: 7px; font-size: 14px; line-height: 1.75; padding-left: 57px; word-break: break-word; }
+.post-body { margin-top: 7px; font-size: var(--post-font-size, 14px); line-height: var(--personal-lh, 1.75); padding-left: 57px; word-break: break-word; }
 .post-body em { color: var(--text2); font-style: italic; font-family: var(--serif); }
 .mention { color: var(--accent); cursor: pointer; font-weight: 500; }
 .mention:hover { text-decoration: underline; }
@@ -783,6 +783,7 @@ input, textarea { font-family: var(--sans); color: var(--text); }
       <!-- 하단 -->
       <div class="sb-bottom">
         <div class="lnav-item" onclick="toggleTheme()"><i class="ti ti-sun" id="theme-icon"></i><span>테마</span></div>
+        <div class="lnav-item" onclick="openPersonalPanel()"><i class="ti ti-settings"></i><span>개인 설정</span></div>
         <div class="lnav-item" id="nav-cust" onclick="openCustPanel()" style="display:none"><i class="ti ti-paint"></i><span>꾸미기</span><span class="owner-tag" style="margin-left:auto;font-size:9px">개설자</span></div>
         <div class="user-pill">
           <div class="user-pill-av" id="user-pill-av" onclick="toggleUserMenu()" style="cursor:pointer"></div>
@@ -1058,6 +1059,16 @@ input, textarea { font-family: var(--sans); color: var(--text); }
   </div>
   <div class="cust-panel-body" id="cust-panel-body"></div>
   <div class="cust-save"><button class="btn btn-primary btn-full" onclick="saveCustPanel()">저장하기</button></div>
+</div>
+
+<!-- 개인 설정 패널 -->
+<div class="cust-panel" id="personal-panel">
+  <div class="cust-panel-head">
+    <span style="font-size:13px;font-weight:500">개인 설정</span>
+    <button class="modal-close" onclick="closePersonalPanel()"><i class="ti ti-x"></i></button>
+  </div>
+  <div class="cust-panel-body" id="personal-panel-body"></div>
+  <div class="cust-save"><button class="btn btn-primary btn-full" onclick="savePersonalSettings()">적용하기</button></div>
 </div>
 
 <!-- 계정 메뉴 -->
@@ -1549,6 +1560,7 @@ async function initApp() {
   appUser = res.user;
   appWorlds = res.worlds || [];
   applyTheme(appUser.theme || 'light');
+  applyPersonalSettings();
   showPage('page-main');
   const av = document.getElementById('user-pill-av');
   if (av) av.textContent = appUser.display_name[0].toUpperCase();
@@ -1750,6 +1762,7 @@ async function loadWorldData() {
   }
   const rn = document.getElementById('rcard-name'); if (rn) rn.textContent = currentWorld.name;
   const rw = document.getElementById('rside-world'); if (rw) rw.style.display = '';
+  applyWorldBg(currentWorld);
   // 이벤트 패널 표시 + 즉시 데이터 로드
   const rEvents = document.getElementById('rside-events');
   if (rEvents) rEvents.style.display = '';
@@ -2918,6 +2931,187 @@ async function saveCustPanel() {
   }
   closeCustPanel();
   toast('저장됐습니다');
+}
+
+// ─── 개인 설정 ───
+const _PS_KEY = 'lorethread_personal';
+
+function loadPersonalSettings() {
+  try { return JSON.parse(localStorage.getItem(_PS_KEY) || '{}'); } catch { return {}; }
+}
+
+function applyPersonalSettings() {
+  const ps = loadPersonalSettings();
+  const root = document.documentElement;
+
+  // 폰트
+  const fontMap = {
+    '': "'Noto Sans KR', sans-serif",
+    'serif': "'Noto Serif KR', serif",
+    'blackhan': "'Black Han Sans', sans-serif",
+    'jua': "'Jua', sans-serif",
+    'gaegu': "'Gaegu', cursive",
+  };
+  if (ps.font && ps.font !== '') {
+    const fontName = { serif: 'Noto Serif KR', blackhan: 'Black Han Sans', jua: 'Jua', gaegu: 'Gaegu' }[ps.font];
+    if (fontName) {
+      let link = document.getElementById('personal-font-link');
+      if (!link) { link = document.createElement('link'); link.id = 'personal-font-link'; link.rel = 'stylesheet'; document.head.appendChild(link); }
+      link.href = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(fontName)}:wght@400;500;700&display=swap`;
+    }
+    root.style.setProperty('--sans', fontMap[ps.font] || fontMap['']);
+  } else {
+    root.style.setProperty('--sans', "'Noto Sans KR', 'Apple SD Gothic Neo', sans-serif");
+  }
+
+  // 글자 크기
+  if (ps.fontSize) {
+    document.querySelector('html').style.fontSize = ps.fontSize + 'px';
+  } else {
+    document.querySelector('html').style.fontSize = '14px';
+  }
+
+  // 줄간격
+  if (ps.lineHeight) {
+    root.style.setProperty('--personal-lh', ps.lineHeight);
+    document.querySelectorAll('.post-body').forEach(el => el.style.lineHeight = ps.lineHeight);
+  }
+
+  // 레이아웃 간격 (피드 패딩)
+  if (ps.feedSpacing) {
+    const val = { compact: '6px 12px', normal: '12px 16px', relaxed: '20px 20px' }[ps.feedSpacing] || '12px 16px';
+    root.style.setProperty('--feed-post-padding', val);
+  }
+
+  // 사이드바 너비
+  if (ps.sidebarWidth) {
+    const w = ps.sidebarWidth + 'px';
+    document.querySelectorAll('.left-panel').forEach(el => {
+      el.style.width = w; el.style.minWidth = w; el.style.maxWidth = w;
+    });
+  }
+
+  // 포스트 글자 크기
+  if (ps.postFontSize) {
+    root.style.setProperty('--post-font-size', ps.postFontSize + 'px');
+    document.querySelectorAll('.post-body').forEach(el => el.style.fontSize = ps.postFontSize + 'px');
+  }
+}
+
+function renderPersonalPanel() {
+  const ps = loadPersonalSettings();
+  document.getElementById('personal-panel-body').innerHTML = `
+    <div style="margin-bottom:18px">
+      <div style="font-size:11px;font-weight:600;color:var(--text3);letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px">글꼴</div>
+      <div class="field"><label>UI 폰트</label>
+        <select class="finput" id="ps-font" style="font-size:13px">
+          <option value="" ${!ps.font?'selected':''}>기본 (Noto Sans KR)</option>
+          <option value="serif" ${ps.font==='serif'?'selected':''}>명조체 (Noto Serif KR)</option>
+          <option value="blackhan" ${ps.font==='blackhan'?'selected':''}>블랙한산스</option>
+          <option value="jua" ${ps.font==='jua'?'selected':''}>주아</option>
+          <option value="gaegu" ${ps.font==='gaegu'?'selected':''}>개구</option>
+        </select>
+      </div>
+      <div class="field"><label>기본 글자 크기</label>
+        <div style="display:flex;align-items:center;gap:8px">
+          <input type="range" min="12" max="18" value="${ps.fontSize||14}" step="1" style="flex:1" id="ps-fontsize" oninput="document.getElementById('ps-fontsize-v').textContent=this.value+'px'">
+          <span id="ps-fontsize-v" style="font-size:12px;color:var(--text2);min-width:36px;text-align:right">${ps.fontSize||14}px</span>
+        </div>
+      </div>
+      <div class="field"><label>포스트 글자 크기</label>
+        <div style="display:flex;align-items:center;gap:8px">
+          <input type="range" min="11" max="18" value="${ps.postFontSize||14}" step="1" style="flex:1" id="ps-postfont" oninput="document.getElementById('ps-postfont-v').textContent=this.value+'px'">
+          <span id="ps-postfont-v" style="font-size:12px;color:var(--text2);min-width:36px;text-align:right">${ps.postFontSize||14}px</span>
+        </div>
+      </div>
+      <div class="field"><label>줄간격</label>
+        <div style="display:flex;align-items:center;gap:8px">
+          <input type="range" min="1.4" max="2.4" value="${ps.lineHeight||1.75}" step="0.05" style="flex:1" id="ps-lh" oninput="document.getElementById('ps-lh-v').textContent=parseFloat(this.value).toFixed(2)">
+          <span id="ps-lh-v" style="font-size:12px;color:var(--text2);min-width:36px;text-align:right">${parseFloat(ps.lineHeight||1.75).toFixed(2)}</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-bottom:18px">
+      <div style="font-size:11px;font-weight:600;color:var(--text3);letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px">레이아웃</div>
+      <div class="field"><label>피드 간격</label>
+        <div style="display:flex;gap:6px">
+          ${['compact','normal','relaxed'].map(s => `
+            <div onclick="document.querySelectorAll('.ps-spacing-opt').forEach(e=>e.style.borderColor='var(--border)');this.style.borderColor='var(--accent)';document.getElementById('ps-spacing-val').value='${s}'"
+              class="ps-spacing-opt"
+              style="flex:1;padding:8px;border:2px solid ${(ps.feedSpacing||'normal')===s?'var(--accent)':'var(--border)'};border-radius:var(--radius-sm);cursor:pointer;text-align:center;font-size:11px;transition:border-color .15s">
+              ${{compact:'좁게',normal:'보통',relaxed:'넓게'}[s]}
+            </div>`).join('')}
+          <input type="hidden" id="ps-spacing-val" value="${ps.feedSpacing||'normal'}">
+        </div>
+      </div>
+      <div class="field"><label>사이드바 너비</label>
+        <div style="display:flex;align-items:center;gap:8px">
+          <input type="range" min="200" max="320" value="${ps.sidebarWidth||260}" step="10" style="flex:1" id="ps-sidebar" oninput="document.getElementById('ps-sidebar-v').textContent=this.value+'px'">
+          <span id="ps-sidebar-v" style="font-size:12px;color:var(--text2);min-width:36px;text-align:right">${ps.sidebarWidth||260}px</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-bottom:18px">
+      <div style="font-size:11px;font-weight:600;color:var(--text3);letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px">테마</div>
+      <div class="field"><label>밝기 모드</label>
+        <div style="display:flex;gap:6px">
+          <div onclick="applyTheme('light');renderPersonalPanel()" style="flex:1;padding:8px;border:2px solid ${document.documentElement.getAttribute('data-theme')==='dark'?'var(--border)':'var(--accent)'};border-radius:var(--radius-sm);cursor:pointer;text-align:center;font-size:11px">☀️ 라이트</div>
+          <div onclick="applyTheme('dark');renderPersonalPanel()" style="flex:1;padding:8px;border:2px solid ${document.documentElement.getAttribute('data-theme')==='dark'?'var(--accent)':'var(--border)'};border-radius:var(--radius-sm);cursor:pointer;text-align:center;font-size:11px">🌙 다크</div>
+        </div>
+      </div>
+      <div class="field"><label>강조 색상</label>
+        <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:4px" id="ps-accent-row">
+          ${[0,1,2,3,4,5,6,7,8,9].map(i => {
+            const isDark = document.documentElement.getAttribute('data-theme')==='dark';
+            const palettes = [
+              {l:'#2B5CE6',d:'#4d7fff'},{l:'#534AB7',d:'#7b72d4'},{l:'#0F6E56',d:'#1da882'},
+              {l:'#993C1D',d:'#d4622e'},{l:'#993556',d:'#d44d7a'},{l:'#3B6D11',d:'#5ea81a'},
+              {l:'#854F0B',d:'#c47a1a'},{l:'#1a6b8a',d:'#2da8d4'},{l:'#444441',d:'#888885'},{l:'#8B1A1A',d:'#c43030'}
+            ];
+            const col = isDark ? palettes[i].d : palettes[i].l;
+            return `<div title="색상 ${i+1}" onclick="applyAccent(${i})" style="width:24px;height:24px;border-radius:50%;background:${col};cursor:pointer;border:${_currentAccentIdx===i?'3px solid var(--text)':'2px solid transparent'};flex-shrink:0;transition:transform .1s" onmouseover="this.style.transform='scale(1.15)'" onmouseout="this.style.transform=''"></div>`;
+          }).join('')}
+        </div>
+      </div>
+    </div>
+
+    <button onclick="resetPersonalSettings()" style="width:100%;padding:8px;border-radius:var(--radius-sm);border:1px solid var(--border2);color:var(--text3);background:none;font-family:var(--sans);font-size:12px;cursor:pointer;margin-top:4px">
+      <i class="ti ti-refresh"></i> 기본값으로 초기화
+    </button>
+  `;
+}
+
+function openPersonalPanel() {
+  renderPersonalPanel();
+  document.getElementById('personal-panel').classList.add('open');
+}
+
+function closePersonalPanel() {
+  document.getElementById('personal-panel').classList.remove('open');
+}
+
+function savePersonalSettings() {
+  const ps = {
+    font: document.getElementById('ps-font').value,
+    fontSize: parseInt(document.getElementById('ps-fontsize').value),
+    postFontSize: parseInt(document.getElementById('ps-postfont').value),
+    lineHeight: parseFloat(document.getElementById('ps-lh').value),
+    feedSpacing: document.getElementById('ps-spacing-val').value,
+    sidebarWidth: parseInt(document.getElementById('ps-sidebar').value),
+  };
+  localStorage.setItem(_PS_KEY, JSON.stringify(ps));
+  applyPersonalSettings();
+  closePersonalPanel();
+  toast('개인 설정이 저장됐습니다');
+}
+
+function resetPersonalSettings() {
+  localStorage.removeItem(_PS_KEY);
+  applyPersonalSettings();
+  renderPersonalPanel();
+  toast('기본값으로 초기화됐습니다');
 }
 
 function applyWorldTheme(w) {
