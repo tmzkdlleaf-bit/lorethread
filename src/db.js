@@ -6,6 +6,13 @@ const pool = new Pool({
   ssl: process.env.DATABASE_URL?.includes('railway') || process.env.NODE_ENV === 'production'
     ? { rejectUnauthorized: false }
     : false,
+  max: 10,              // 최대 연결 수
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000,
+});
+
+pool.on('error', (err) => {
+  console.error('DB pool error:', err.message);
 });
 
 // ? → $1,$2,... 변환 헬퍼
@@ -23,7 +30,7 @@ export async function initDb() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, display_name TEXT NOT NULL, role TEXT DEFAULT 'member', theme TEXT DEFAULT 'light', created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS worlds (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL, slug TEXT UNIQUE NOT NULL, description TEXT DEFAULT '', banner_color TEXT DEFAULT '#185FA5', banner_height INTEGER DEFAULT 140, banner_image_url TEXT DEFAULT '', icon_emoji TEXT DEFAULT '🌍', icon_image_url TEXT DEFAULT '', announce_text TEXT DEFAULT '', bg_image_url TEXT DEFAULT '', bg_overlay_opacity REAL DEFAULT 0.5, created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS worlds (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL, slug TEXT UNIQUE NOT NULL, description TEXT DEFAULT '', banner_color TEXT DEFAULT '#185FA5', banner_height INTEGER DEFAULT 140, banner_image_url TEXT DEFAULT '', icon_emoji TEXT DEFAULT '', icon_image_url TEXT DEFAULT '', announce_text TEXT DEFAULT '', bg_image_url TEXT DEFAULT '', bg_overlay_opacity REAL DEFAULT 0.5, custom_font TEXT DEFAULT '', card_style TEXT DEFAULT 'default', banner_align TEXT DEFAULT 'left', created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS world_members (world_id TEXT NOT NULL, user_id TEXT NOT NULL, joined_at TEXT NOT NULL, PRIMARY KEY (world_id, user_id));
     CREATE TABLE IF NOT EXISTS characters (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, world_id TEXT NOT NULL, name TEXT NOT NULL, handle TEXT NOT NULL, role TEXT DEFAULT '', bio TEXT DEFAULT '', color_bg TEXT DEFAULT '#E6F1FB', color_fg TEXT DEFAULT '#185FA5', avatar_url TEXT DEFAULT '', header_url TEXT DEFAULT '', is_npc INTEGER DEFAULT 0, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS char_sections (id TEXT PRIMARY KEY, character_id TEXT NOT NULL, title TEXT NOT NULL, content TEXT DEFAULT '', sort_order INTEGER DEFAULT 0);
@@ -42,6 +49,15 @@ export async function initDb() {
     CREATE TABLE IF NOT EXISTS dm_reads (user_id TEXT NOT NULL, room_id TEXT NOT NULL, last_read_at TEXT NOT NULL, PRIMARY KEY (user_id, room_id));
   `);
   console.log('✓ DB tables ready');
+  // 마이그레이션: 기존 테이블에 새 컬럼 추가
+  const migrations = [
+    `ALTER TABLE worlds ADD COLUMN IF NOT EXISTS custom_font TEXT DEFAULT ''`,
+    `ALTER TABLE worlds ADD COLUMN IF NOT EXISTS card_style TEXT DEFAULT 'default'`,
+    `ALTER TABLE worlds ADD COLUMN IF NOT EXISTS banner_align TEXT DEFAULT 'left'`,
+  ];
+  for (const sql of migrations) {
+    try { await pool.query(sql); } catch {}
+  }
 }
 
 export function now() { return new Date().toISOString(); }
@@ -78,7 +94,7 @@ export async function createWorld(w) {
   );
 }
 export async function updateWorld(id, fields) {
-  const allowed = ['name','description','banner_color','banner_height','banner_image_url','icon_emoji','icon_image_url','announce_text','bg_image_url','bg_overlay_opacity'];
+  const allowed = ['name','description','banner_color','banner_height','banner_image_url','icon_emoji','icon_image_url','announce_text','bg_image_url','bg_overlay_opacity','custom_font','card_style','banner_align'];
   const keys = Object.keys(fields).filter(k=>allowed.includes(k)&&fields[k]!==undefined);
   if(!keys.length) return getWorldById(id);
   const set = keys.map((k,i)=>`${k} = $${i+1}`).join(', ');
@@ -130,44 +146,88 @@ export async function setCharLinks(cid,links) {
 }
 
 // ── Post ──
-async function enrichPost(p) {
-  const [c,media,rr,rep] = await Promise.all([
-    pool.query(`SELECT c.*,u.display_name as player_name FROM characters c JOIN users u ON u.id=c.user_id WHERE c.id=$1`,[p.character_id]).then(r=>r.rows[0]||{}),
-    pool.query('SELECT * FROM post_media WHERE post_id=$1 ORDER BY sort_order',[p.id]).then(r=>r.rows),
-    pool.query('SELECT COUNT(*) as cnt FROM reactions WHERE post_id=$1',[p.id]).then(r=>r.rows[0]),
-    pool.query('SELECT COUNT(*) as cnt FROM posts WHERE reply_to_id=$1',[p.id]).then(r=>r.rows[0]),
-  ]);
-  return {...p,char_name:c.name||'',char_handle:c.handle||'',color_bg:c.color_bg||'#eee',color_fg:c.color_fg||'#333',avatar_url:c.avatar_url||'',player_name:c.player_name||'',user_id:c.user_id||'',media,reactions:parseInt(rr?.cnt||0),replies:parseInt(rep?.cnt||0)};
+// ── Post enrichment (단일 JOIN 쿼리로 최적화) ──
+const POST_SELECT = `
+  SELECT p.*,
+    c.name as char_name, c.handle as char_handle,
+    c.color_bg, c.color_fg, c.avatar_url, c.user_id,
+    u.display_name as player_name,
+    COUNT(DISTINCT r.id) as reactions,
+    COUNT(DISTINCT rep.id) as replies
+  FROM posts p
+  LEFT JOIN characters c ON c.id = p.character_id
+  LEFT JOIN users u ON u.id = c.user_id
+  LEFT JOIN reactions r ON r.post_id = p.id
+  LEFT JOIN posts rep ON rep.reply_to_id = p.id
+`;
+
+async function attachMedia(posts) {
+  if (!posts.length) return posts;
+  const ids = posts.map(p => p.id);
+  const { rows } = await pool.query(
+    `SELECT * FROM post_media WHERE post_id = ANY($1) ORDER BY sort_order`, [ids]
+  );
+  const mediaMap = {};
+  for (const m of rows) {
+    if (!mediaMap[m.post_id]) mediaMap[m.post_id] = [];
+    mediaMap[m.post_id].push(m);
+  }
+  return posts.map(p => ({
+    ...p,
+    reactions: parseInt(p.reactions || 0),
+    replies: parseInt(p.replies || 0),
+    media: mediaMap[p.id] || []
+  }));
 }
+
+async function enrichPost(p) {
+  const { rows } = await pool.query(
+    POST_SELECT + ` WHERE p.id = $1 GROUP BY p.id, c.name, c.handle, c.color_bg, c.color_fg, c.avatar_url, c.user_id, u.display_name`,
+    [p.id || p]
+  );
+  const post = rows[0];
+  if (!post) return null;
+  return (await attachMedia([post]))[0];
+}
+
 export async function createPost(p) {
   await pool.query('INSERT INTO posts (id,character_id,world_id,content,reply_to_id,is_pinned,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)',[p.id,p.character_id,p.world_id,p.content,p.reply_to_id||null,0,p.created_at]);
 }
 export async function getPostById(id) {
-  const p=await pool.query('SELECT * FROM posts WHERE id=$1',[id]).then(r=>r.rows[0]);
-  return p?enrichPost(p):null;
+  return enrichPost(id);
 }
 export async function getPostsByWorld(wid,limit=30,offset=0) {
-  const posts=await pool.query('SELECT * FROM posts WHERE world_id=$1 AND reply_to_id IS NULL ORDER BY created_at DESC LIMIT $2 OFFSET $3',[wid,limit,offset]).then(r=>r.rows);
-  return Promise.all(posts.map(enrichPost));
+  const { rows } = await pool.query(
+    POST_SELECT + ` WHERE p.world_id = $1 AND p.reply_to_id IS NULL GROUP BY p.id, c.name, c.handle, c.color_bg, c.color_fg, c.avatar_url, c.user_id, u.display_name ORDER BY p.created_at DESC LIMIT $2 OFFSET $3`,
+    [wid, limit, offset]
+  );
+  return attachMedia(rows);
 }
 export async function getReplies(pid) {
-  const posts=await pool.query('SELECT * FROM posts WHERE reply_to_id=$1 ORDER BY created_at ASC',[pid]).then(r=>r.rows);
-  return Promise.all(posts.map(enrichPost));
+  const { rows } = await pool.query(
+    POST_SELECT + ` WHERE p.reply_to_id = $1 GROUP BY p.id, c.name, c.handle, c.color_bg, c.color_fg, c.avatar_url, c.user_id, u.display_name ORDER BY p.created_at ASC`,
+    [pid]
+  );
+  return attachMedia(rows);
 }
 export async function deletePost(id) {
-  const replies=await pool.query('SELECT id FROM posts WHERE reply_to_id=$1',[id]).then(r=>r.rows);
+  const replies = await pool.query('SELECT id FROM posts WHERE reply_to_id=$1',[id]).then(r=>r.rows);
   for(const r of replies) await deletePost(r.id);
   await pool.query('DELETE FROM post_media WHERE post_id=$1',[id]);
   await pool.query('DELETE FROM reactions WHERE post_id=$1',[id]);
   await pool.query('DELETE FROM posts WHERE id=$1',[id]);
 }
 export async function getPostsByChar(cid,limit=30) {
-  const posts=await pool.query('SELECT * FROM posts WHERE character_id=$1 AND reply_to_id IS NULL ORDER BY is_pinned DESC, created_at DESC LIMIT $2',[cid,limit]).then(r=>r.rows);
-  return Promise.all(posts.map(enrichPost));
+  const { rows } = await pool.query(
+    POST_SELECT + ` WHERE p.character_id = $1 AND p.reply_to_id IS NULL GROUP BY p.id, c.name, c.handle, c.color_bg, c.color_fg, c.avatar_url, c.user_id, u.display_name ORDER BY p.is_pinned DESC, p.created_at DESC LIMIT $2`,
+    [cid, limit]
+  );
+  return attachMedia(rows);
 }
 export async function addPostMedia(m) {
   await pool.query('INSERT INTO post_media (id,post_id,url,media_type,sort_order) VALUES ($1,$2,$3,$4,$5)',[m.id,m.post_id,m.url,m.media_type||'image',m.sort_order||0]);
 }
+
 
 // ── Reaction ──
 export async function getReaction(pid,cid) { return q('SELECT * FROM reactions WHERE post_id=? AND character_id=?').get(pid,cid); }

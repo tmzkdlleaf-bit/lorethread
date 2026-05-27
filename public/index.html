@@ -676,7 +676,23 @@ input, textarea { font-family: var(--sans); color: var(--text); }
 .dm-send-btn:hover { transform:scale(1.08); opacity:.9; }
 .dm-send-btn:active { transform:scale(.95); }
 
-/* ── 멘션 자동완성 ── */
+/* ── 카드 스타일 ── */
+#feed-list[data-card-style="card"] .post { margin: 8px; border-radius: var(--radius); border: 1px solid var(--border); box-shadow: var(--shadow); }
+#feed-list[data-card-style="card"] .post:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); }
+#feed-list[data-card-style="compact"] .post { padding: 8px 14px; }
+#feed-list[data-card-style="compact"] .post-av { width: 34px; height: 34px; font-size: 13px; }
+#feed-list[data-card-style="compact"] .post-body { padding-left: 45px; font-size: 13px; }
+#feed-list[data-card-style="compact"] .post-actions { padding-left: 45px; }
+#feed-list[data-card-style="compact"] .media-grid { padding-left: 45px; }
+
+/* ── 스켈레톤 로딩 ── */
+.skeleton { background: linear-gradient(90deg, var(--bg3) 25%, var(--bg2) 50%, var(--bg3) 75%); background-size: 200% 100%; animation: shimmer 1.4s infinite; border-radius: var(--radius-sm); }
+@keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+.skeleton-post { padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.skeleton-row { display: flex; gap: 11px; }
+.skeleton-av { width: 46px; height: 46px; border-radius: 50%; flex-shrink: 0; }
+.skeleton-lines { flex: 1; display: flex; flex-direction: column; gap: 8px; padding-top: 4px; }
+.skeleton-line { height: 12px; border-radius: 6px; }
 .mention-dropdown { position:absolute; z-index:300; background:var(--bg2); border:1px solid var(--border2); border-radius:var(--radius); box-shadow:var(--shadow-md); min-width:200px; max-width:280px; overflow:hidden; }
 .mention-item { display:flex; align-items:center; gap:8px; padding:8px 12px; cursor:pointer; transition:background .1s; font-size:13px; }
 .mention-item:hover { background:var(--bg3); }
@@ -1546,11 +1562,11 @@ function startSSE() {
     if (data.type === 'reply' || data.type === 'mention') {
       loadNotifs();
       playNotifSound();
-      toast(`💬 ${data.actor}님이 ${data.type === 'reply' ? '답글을 달았습니다' : '멘션했습니다'}`);
+      toast(`${data.actor}님이 ${data.type === 'reply' ? '답글을 달았습니다' : '멘션했습니다'}`);
     }
     if (data.type === 'react') {
       loadNotifs();
-      toast(`❤️ ${data.actor}님이 좋아요를 눌렀습니다`);
+      toast(`${data.actor}님이 좋아요를 눌렀습니다`);
     }
     if (data.type === 'dm') {
       // DM 실시간 수신
@@ -1558,7 +1574,7 @@ function startSSE() {
         loadDmMessages(); // 현재 방이면 즉시 갱신
       } else {
         // 다른 방이면 미읽음 표시 + 토스트
-        toast(`💌 새 메시지가 왔습니다`);
+        toast(`새 메시지가 왔습니다`);
         loadDmRooms(); // 방 목록 갱신
       }
       // DM 폴링 재설정 (SSE 수신 시 폴링 불필요)
@@ -1595,6 +1611,7 @@ async function selectWorld(world) {
   setTimeout(initUserPill, 100);
   renderWorldTabs();
   renderWorldBanner();
+  applyWorldTheme(world);
   await loadWorldData();
   navTo('home');
 }
@@ -1707,7 +1724,18 @@ let feedTag = '';
 async function loadFeed(reset = true) {
   if (reset) {
     feedOffset = 0; feedDone = false; feedPosts = [];
-    document.getElementById('feed-list').innerHTML = '<div class="loading-center"><div class="spinner"></div></div>';
+    // 스켈레톤 로딩
+    document.getElementById('feed-list').innerHTML = Array(5).fill(0).map(() => `
+      <div class="skeleton-post">
+        <div class="skeleton-row">
+          <div class="skeleton skeleton-av"></div>
+          <div class="skeleton-lines">
+            <div class="skeleton skeleton-line" style="width:35%"></div>
+            <div class="skeleton skeleton-line" style="width:85%"></div>
+            <div class="skeleton skeleton-line" style="width:70%"></div>
+          </div>
+        </div>
+      </div>`).join('');
   }
   if (feedLoading || feedDone) return;
   feedLoading = true;
@@ -1962,7 +1990,7 @@ async function submitPost() {
   document.getElementById('media-preview-area').innerHTML = '';
   feedPosts.unshift(res.post);
   renderFeed();
-  toast('포스트가 등록됐습니다 ✨');
+  toast('포스트가 등록됐습니다');
 }
 
 async function submitReply(e, postId) {
@@ -2041,7 +2069,7 @@ async function submitEditPost() {
   const r = await api('PATCH', `/api/posts/${id}`, { content });
   if (r.ok) {
     closeModal('edit-post-modal');
-    toast('수정됐습니다 ✏️');
+    toast('수정됐습니다');
     // 현재 뷰에 따라 새로고침
     const tv = document.getElementById('view-thread');
     if (tv && tv.style.display !== 'none') {
@@ -2068,7 +2096,7 @@ async function togglePinPost(postId) {
     } else {
       await loadFeed();
     }
-    toast(curPinned ? '고정 해제됐습니다' : '고정됐습니다 📌');
+    toast(curPinned ? '고정 해제됐습니다' : '고정됐습니다');
   }
 }
 
@@ -2337,7 +2365,7 @@ async function saveCharacter() {
   closeModal('new-char-modal');
   await loadWorldData();
   renderCharsGrid();
-  toast(editingCharId ? '캐릭터가 수정됐습니다' : '캐릭터가 등록됐습니다 ✨');
+  toast(editingCharId ? '캐릭터가 수정됐습니다' : '캐릭터가 등록됐습니다');
 }
 
 // ─── Char editor modal functions ───
@@ -2562,8 +2590,8 @@ function copyInviteCode() {
   const input = document.getElementById('cp-invite-code');
   const code = input?.value;
   if (!code) { toast('먼저 초대 코드를 생성해주세요.'); return; }
-  navigator.clipboard.writeText(code).then(() => toast('코드가 복사됐습니다 ✓')).catch(() => {
-    input.select(); document.execCommand('copy'); toast('코드가 복사됐습니다 ✓');
+  navigator.clipboard.writeText(code).then(() => toast('코드가 복사됐습니다')).catch(() => {
+    input.select(); document.execCommand('copy'); toast('코드가 복사됐습니다');
   });
 }
 
@@ -2580,7 +2608,7 @@ async function useInviteCode(code) {
     const joined = appWorlds.find(w => w.id === r.world.id);
     if (joined) {
       await selectWorld(joined);
-      toast(`"${r.world.name}" 세계관에 참여했습니다 🎉`);
+      toast(`"${r.world.name}" 세계관에 참여했습니다`);
     }
   } else {
     toast(r.error || '유효하지 않은 코드입니다.');
@@ -2615,14 +2643,14 @@ function renderCustPanel() {
       <div style="font-size:11px;font-weight:600;color:var(--text3);letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px">세계관 아이콘</div>
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
         <div style="width:48px;height:48px;border-radius:10px;background:${w.banner_color||'#185FA5'};display:flex;align-items:center;justify-content:center;font-size:22px;overflow:hidden;flex-shrink:0;border:1px solid var(--border2)" id="icon-preview-box">
-          ${w.icon_image_url ? `<img src="${w.icon_image_url}" style="width:100%;height:100%;object-fit:cover;border-radius:9px" alt="">` : (w.icon_emoji||'🌍')}
+          ${w.icon_image_url ? `<img src="${w.icon_image_url}" style="width:100%;height:100%;object-fit:cover;border-radius:9px" alt="">` : (w.icon_emoji||'')}
         </div>
         <div style="flex:1">
           <label style="border:1.5px dashed var(--border2);border-radius:var(--radius-sm);padding:8px;display:flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;position:relative;overflow:hidden;margin-bottom:5px">
             <input type="file" accept="image/*" style="position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%" onchange="uploadWorldIcon(event)">
             <i class="ti ti-photo" style="font-size:13px;color:var(--text3)"></i><span style="font-size:12px;color:var(--text3)">이미지 업로드</span>
           </label>
-          <input class="finput" id="cp-emoji" value="${w.icon_emoji||'🌍'}" maxlength="4" style="font-size:16px;text-align:center" placeholder="또는 이모지" oninput="document.getElementById('banner-logo').textContent=this.value">
+          <input class="finput" id="cp-emoji" value="${w.icon_emoji||''}" maxlength="4" style="font-size:16px;text-align:center" placeholder="또는 이모지" oninput="document.getElementById('banner-logo').textContent=this.value">
         </div>
       </div>
     </div>
@@ -2682,6 +2710,34 @@ function renderCustPanel() {
     </div>
 
     <div style="margin-bottom:16px">
+      <div style="font-size:11px;font-weight:600;color:var(--text3);letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px">스타일</div>
+      <div class="field"><label>폰트</label>
+        <select class="finput" id="cp-font" style="font-size:13px">
+          <option value="" ${!w.custom_font?'selected':''}>기본 (Noto Sans KR)</option>
+          <option value="Noto Serif KR" ${w.custom_font==='Noto Serif KR'?'selected':''}>명조체 (Noto Serif KR)</option>
+          <option value="Black Han Sans" ${w.custom_font==='Black Han Sans'?'selected':''}>블랙한산스</option>
+          <option value="Jua" ${w.custom_font==='Jua'?'selected':''}>주아</option>
+          <option value="Gaegu" ${w.custom_font==='Gaegu'?'selected':''}>개구</option>
+        </select>
+      </div>
+      <div class="field"><label>포스트 카드 스타일</label>
+        <div style="display:flex;gap:6px">
+          ${['default','card','compact'].map(s => `
+            <div onclick="selectCardStyle('${s}')" id="card-style-${s}" style="flex:1;padding:8px;border:2px solid ${(w.card_style||'default')===s?'var(--accent)':'var(--border)'};border-radius:var(--radius-sm);cursor:pointer;text-align:center;font-size:11px;transition:border-color .15s">
+              ${{default:'기본',card:'카드형',compact:'컴팩트'}[s]}
+            </div>`).join('')}
+        </div>
+      </div>
+      <div class="field"><label>배너 텍스트 위치</label>
+        <select class="finput" id="cp-banner-align" style="font-size:13px">
+          <option value="left" ${(w.banner_align||'left')==='left'?'selected':''}>왼쪽</option>
+          <option value="center" ${w.banner_align==='center'?'selected':''}>가운데</option>
+          <option value="right" ${w.banner_align==='right'?'selected':''}>오른쪽</option>
+        </select>
+      </div>
+    </div>
+
+    <div style="margin-bottom:16px">
       <div style="font-size:11px;font-weight:600;color:var(--text3);letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px">초대 링크</div>
       <div style="font-size:12px;color:var(--text2);margin-bottom:8px">코드를 공유하면 누구나 이 세계관에 참여할 수 있습니다.</div>
       <div style="display:flex;gap:6px">
@@ -2701,6 +2757,15 @@ function renderCustPanel() {
   _cpColor = null;
 }
 
+let _cardStyle = 'default';
+function selectCardStyle(s) {
+  _cardStyle = s;
+  ['default','card','compact'].forEach(t => {
+    const el = document.getElementById('card-style-' + t);
+    if (el) el.style.borderColor = t === s ? 'var(--accent)' : 'var(--border)';
+  });
+}
+
 let cpColor = null;
 function cpSelectColor(el) {
   document.querySelectorAll('#cp-color-row .color-swatch').forEach(s => s.classList.remove('selected'));
@@ -2713,20 +2778,15 @@ function cpSelectCustomColor(el) {
   cpColor = el.value;
   document.getElementById('world-banner').style.background = cpColor;
 }
-// HTML onclick 참조 aliases
 const cpSelColor = (el) => cpSelectColor(el);
 const cpSelCustomColor = (el) => cpSelectCustomColor(el);
 function selCBg(el) {
   document.querySelectorAll('#char-bg-row .cswatch').forEach(s => s.classList.remove('sel'));
-  el.classList.add('sel');
-  charBg = el.dataset.c;
-  updateCharAvPreview();
+  el.classList.add('sel'); charBg = el.dataset.c; updateCharAvPreview();
 }
 function selCFg(el) {
   document.querySelectorAll('#char-fg-row .cswatch').forEach(s => s.classList.remove('sel'));
-  el.classList.add('sel');
-  charFg = el.dataset.c;
-  updateCharAvPreview();
+  el.classList.add('sel'); charFg = el.dataset.c; updateCharAvPreview();
 }
 
 async function saveCustPanel() {
@@ -2739,16 +2799,45 @@ async function saveCustPanel() {
     bg_image_url: currentWorld.bg_image_url || '',
     banner_image_url: currentWorld.banner_image_url || '',
     bg_overlay_opacity: parseInt(document.getElementById('cp-ov')?.value || '40'),
+    custom_font: document.getElementById('cp-font')?.value || '',
+    card_style: _cardStyle || 'default',
+    banner_align: document.getElementById('cp-banner-align')?.value || 'left',
   });
   if (res.world) {
     currentWorld = res.world;
     const idx = appWorlds.findIndex(w => w.id === currentWorld.id);
     if (idx >= 0) appWorlds[idx] = currentWorld;
+    applyWorldTheme(currentWorld);
     renderWorldTabs();
     renderWorldBanner();
   }
   closeCustPanel();
-  toast('저장됐습니다 ✨');
+  toast('저장됐습니다');
+}
+
+function applyWorldTheme(w) {
+  if (!w) return;
+  // 폰트 적용
+  const font = w.custom_font;
+  if (font) {
+    // 구글 폰트 동적 로드
+    const linkId = 'world-font-link';
+    let link = document.getElementById(linkId);
+    if (!link) { link = document.createElement('link'); link.id = linkId; link.rel = 'stylesheet'; document.head.appendChild(link); }
+    link.href = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(font)}&display=swap`;
+    document.getElementById('center-col')?.style.setProperty('font-family', `'${font}', var(--sans)`);
+  } else {
+    document.getElementById('center-col')?.style.removeProperty('font-family');
+  }
+  // 카드 스타일 적용
+  const feedEl = document.getElementById('feed-list');
+  if (feedEl) {
+    feedEl.dataset.cardStyle = w.card_style || 'default';
+  }
+  _cardStyle = w.card_style || 'default';
+  // 배너 텍스트 위치
+  const bannerInfo = document.getElementById('banner-info');
+  if (bannerInfo) bannerInfo.style.textAlign = w.banner_align || 'left';
 }
 
 // ─── Notifications ───
@@ -2921,16 +3010,16 @@ async function compressImage(file, maxWidth = 1920, quality = 0.85) {
 }
 
 async function uploadFiles(files) {
-  const urls = [];
-  for (const file of files) {
+  // 병렬 업로드
+  const results = await Promise.all(files.map(async file => {
     const compressed = await compressImage(file);
     const form = new FormData();
     form.append('file', compressed);
     const res = await fetch('/api/upload', { method: 'POST', body: form });
     const data = await res.json();
-    if (data.urls?.[0]) urls.push(data.urls[0]);
-  }
-  return urls;
+    return data.urls?.[0] || null;
+  }));
+  return results.filter(Boolean);
 }
 let _mentionTarget = null;
 
@@ -3005,7 +3094,7 @@ async function handleComposeDrop(e) {
   const urls = await uploadFiles(files);
   pendingMediaUrls.push(...urls);
   renderMediaPreview();
-  toast('이미지가 첨부됐습니다 🖼');
+  toast('이미지가 첨부됐습니다');
 }
 
 async function handleComposePaste(e) {
@@ -3017,7 +3106,7 @@ async function handleComposePaste(e) {
   const urls = await uploadFiles([file]);
   pendingMediaUrls.push(...urls);
   renderMediaPreview();
-  toast('이미지가 붙여넣기 됐습니다 📋');
+  toast('이미지가 붙여넣기됐습니다');
 }
 
 function handleComposeKeydown(e) {
@@ -3093,7 +3182,7 @@ function toggleBookmark(e, postId) {
     const icon = btn.querySelector('i');
     if (icon) icon.className = isBookmarked ? 'ti ti-bookmark-filled' : 'ti ti-bookmark';
   }
-  if (bookmarks.has(postId)) toast('북마크에 저장됐습니다 🔖');
+  if (bookmarks.has(postId)) toast('북마크에 저장됐습니다');
   else toast('북마크에서 제거됐습니다');
 }
 
@@ -3357,7 +3446,7 @@ async function loadDmMessages() {
   const wasAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
   if (!msgs.length) {
     el.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--text3);gap:10px">
-      <i class="ti ti-message-heart" style="font-size:36px;opacity:.25"></i>
+      <i class="ti ti-message" style="font-size:36px;opacity:.25"></i>
       <p style="font-size:13px">첫 번째 메시지를 보내보세요!</p>
     </div>`;
     return;
@@ -3660,7 +3749,7 @@ async function uploadWorldIcon(e) {
     const idx = appWorlds.findIndex(w => w.id === currentWorld.id);
     if (idx >= 0) appWorlds[idx] = { ...appWorlds[idx], icon_image_url: d.urls[0] };
     renderWorldTabs();
-    toast('아이콘이 저장됐습니다 ✓');
+    toast('아이콘이 저장됐습니다');
   }
 }
 
@@ -3740,7 +3829,7 @@ async function submitNewAnnounce() {
   const content = document.getElementById('ann-content')?.value.trim();
   if (!title) { toast('제목을 입력해주세요.'); return; }
   const r = await api('POST', `/api/worlds/${encodeURIComponent(currentWorld.slug)}/announcements`, { title, content });
-  if (r.ok) { closeModal('new-announce-modal'); loadAnnounceTab(); refreshRightPanelAnnounce(); toast('공지가 등록됐습니다 📢'); }
+  if (r.ok) { closeModal('new-announce-modal'); loadAnnounceTab(); refreshRightPanelAnnounce(); toast('공지가 등록됐습니다'); }
   else toast(r.error || '오류가 발생했습니다.');
 }
 
@@ -3872,7 +3961,7 @@ async function submitNewEvent() {
     title, content: document.getElementById('ev-content').value.trim(),
     start_date: start, end_date: end, color: _evColor
   });
-  if (r.ok) { closeModal('new-event-modal'); await loadEventTab(); toast('이벤트가 등록됐습니다 🗓'); }
+  if (r.ok) { closeModal('new-event-modal'); await loadEventTab(); toast('이벤트가 등록됐습니다'); }
   else toast(r.error || '오류가 발생했습니다.');
 }
 
