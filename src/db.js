@@ -226,6 +226,15 @@ export async function getPostsByWorld(wid,limit=30,offset=0) {
   );
   return attachMedia(rows);
 }
+
+export async function getPostsByFollowing(wid, followingIds, limit=30, offset=0) {
+  if (!followingIds.length) return [];
+  const { rows } = await pool.query(
+    POST_SELECT + ` WHERE p.world_id = $1 AND p.reply_to_id IS NULL AND p.character_id = ANY($2) GROUP BY p.id, c.name, c.handle, c.color_bg, c.color_fg, c.avatar_url, c.user_id, u.display_name ORDER BY p.created_at DESC LIMIT $3 OFFSET $4`,
+    [wid, followingIds, limit, offset]
+  );
+  return attachMedia(rows);
+}
 export async function getReplies(pid) {
   const { rows } = await pool.query(
     POST_SELECT + ` WHERE p.reply_to_id = $1 GROUP BY p.id, c.name, c.handle, c.color_bg, c.color_fg, c.avatar_url, c.user_id, u.display_name ORDER BY p.created_at ASC`,

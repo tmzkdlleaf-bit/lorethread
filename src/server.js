@@ -7,8 +7,6 @@ import { parse as parseCookie } from 'cookie';
 import bcrypt from 'bcryptjs';
 import { nanoid } from 'nanoid';
 import { v2 as cloudinary } from 'cloudinary';
-import { createGzip } from 'zlib';
-import { pipeline } from 'stream';
 import {
   initDb, now, getDb,
   getUser, getUserByEmail, createUser, updateUser,
@@ -16,7 +14,7 @@ import {
   getWorldBySlug, getWorldById, createWorld, updateWorld, getWorldsByUser, addWorldMember, getWorldMembers,
   getCharsByWorld, getCharsByUser, getCharById, getCharByHandle, createChar, updateChar,
   getCharSections, setCharSections, getCharLinks, setCharLinks,
-  createPost, getPostById, getPostsByWorld, getReplies, deletePost, getPostsByChar,
+  createPost, getPostById, getPostsByWorld, getPostsByFollowing, getReplies, deletePost, getPostsByChar,
   addPostMedia, getReaction, addReaction, removeReaction, getReactionCount,
   createNotif, getNotifs, getUnreadCount, markAllRead,
   getAnnouncements, createAnnouncement, deleteAnnouncement,
@@ -116,68 +114,20 @@ async function getSessionUser(req) {
   } catch { return null; }
 }
 
-function json(res, data, status = 200, cache = false) {
-  const body = JSON.stringify(data);
-  const headers = { 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' };
-  if (cache) headers['Cache-Control'] = 'public, max-age=10, stale-while-revalidate=30';
-  res.writeHead(status, headers);
-  const gz = createGzip();
-  gz.pipe(res);
-  gz.end(body);
+function json(res, data, status = 200) {
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(data));
 }
 function serveFile(res, fp) {
   try {
     const content = readFileSync(fp);
-    const ext = extname(fp).toLowerCase();
     const mime = { '.html':'text/html; charset=utf-8', '.css':'text/css', '.js':'application/javascript', '.png':'image/png', '.jpg':'image/jpeg', '.jpeg':'image/jpeg', '.gif':'image/gif', '.webp':'image/webp', '.mp4':'video/mp4', '.webm':'video/webm', '.svg':'image/svg+xml' };
-    const isStatic = ['.css','.js','.png','.jpg','.jpeg','.gif','.webp','.svg'].includes(ext);
-    const isText = ['.html','.css','.js','.svg'].includes(ext);
-    const headers = { 'Content-Type': mime[ext] || 'application/octet-stream' };
-    if (isStatic) headers['Cache-Control'] = 'public, max-age=31536000, immutable';
-    if (isText) {
-      headers['Content-Encoding'] = 'gzip';
-      res.writeHead(200, headers);
-      const gz = createGzip();
-      gz.pipe(res);
-      gz.end(content);
-    } else {
-      res.writeHead(200, headers);
-      res.end(content);
-    }
+    res.writeHead(200, { 'Content-Type': mime[extname(fp).toLowerCase()] || 'application/octet-stream' });
+    res.end(content);
   } catch { res.writeHead(404); res.end('Not found'); }
 }
 function makeSlug(name) {
   return name.trim().replace(/\s+/g, '-').replace(/[^\w\-가-힣]/g, '').toLowerCase().slice(0, 40) + '-' + nanoid(4);
-}
-
-// ── Rate Limiter ──
-const _rl = new Map();
-function rateLimit(key, maxReq, windowMs) {
-  const now = Date.now();
-  const entry = _rl.get(key) || { count: 0, start: now };
-  if (now - entry.start > windowMs) { entry.count = 1; entry.start = now; }
-  else entry.count++;
-  _rl.set(key, entry);
-  // 오래된 항목 정리 (메모리 누수 방지)
-  if (_rl.size > 10000) {
-    for (const [k, v] of _rl) { if (now - v.start > windowMs * 2) _rl.delete(k); }
-  }
-  return entry.count > maxReq;
-}
-function getIp(req) {
-  return (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
-}
-
-// ── Keep-alive (Railway sleep 방지) ──
-// 프로덕션에서 4분마다 자기 자신에게 ping
-if (process.env.NODE_ENV === 'production' || process.env.RAILWAY_ENVIRONMENT) {
-  setInterval(async () => {
-    try {
-      const url = `http://localhost:${process.env.PORT || 3000}/health`;
-      const r = await fetch(url);
-      console.log(`[keep-alive] ${new Date().toISOString()} ${r.status}`);
-    } catch (e) { console.warn('[keep-alive] ping 실패:', e.message); }
-  }, 4 * 60 * 1000);
 }
 
 const server = http.createServer(async (req, res) => {
@@ -186,24 +136,9 @@ const server = http.createServer(async (req, res) => {
     const path = decodeURIComponent(rawPath);
     const m = req.method;
 
-    const allowedOrigin = process.env.FRONTEND_URL || '*';
-    res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
     if (m === 'OPTIONS') { res.writeHead(204); return res.end(); }
-
-    // ── 헬스체크 ──
-    if (path === '/health') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ ok: true, ts: Date.now() }));
-    }
-
-    // ── 전체 API rate limit (IP당 120회/분) ──
-    const ip = getIp(req);
-    if (path.startsWith('/api/') && rateLimit(`api:${ip}`, 120, 60000)) {
-      return json(res, { error: '요청이 너무 많습니다. 잠시 후 다시 시도해주세요.' }, 429);
-    }
 
     if (rawPath.startsWith('/static/')) return serveFile(res, join(__dirname, '../public', rawPath));
 
@@ -222,8 +157,6 @@ const server = http.createServer(async (req, res) => {
 
     // ── Auth ──
     if (path === '/api/auth/register' && m === 'POST') {
-      // 회원가입: IP당 5회/10분
-      if (rateLimit(`reg:${ip}`, 5, 600000)) return json(res, { error: '잠시 후 다시 시도해주세요.' }, 429);
       const b = await readBody(req);
       if (!b.email || !b.password || !b.display_name) return json(res, { error: '모든 항목을 입력해주세요.' }, 400);
       if (await getUserByEmail(b.email)) return json(res, { error: '이미 사용 중인 이메일입니다.' }, 400);
@@ -235,26 +168,24 @@ const server = http.createServer(async (req, res) => {
       await createUser({ id, email: b.email, password_hash: hash, display_name: b.display_name, role, theme: 'light', created_at: now() });
       const sid = nanoid(32);
       await createSession({ id: sid, user_id: id, created_at: now() });
-      res.setHeader('Set-Cookie', `session=${sid}; Path=/; HttpOnly; Max-Age=2592000; SameSite=None; Secure`);
+      res.setHeader('Set-Cookie', `session=${sid}; Path=/; HttpOnly; Max-Age=2592000`);
       return json(res, { ok: true, user: { id, email: b.email, display_name: b.display_name, role } });
     }
 
     if (path === '/api/auth/login' && m === 'POST') {
-      // 로그인: IP당 10회/분 (브루트포스 방어)
-      if (rateLimit(`login:${ip}`, 10, 60000)) return json(res, { error: '로그인 시도가 너무 많습니다. 1분 후 다시 시도해주세요.' }, 429);
       const b = await readBody(req);
       const u = await getUserByEmail(b.email);
       if (!u || !(await bcrypt.compare(b.password, u.password_hash))) return json(res, { error: '이메일 또는 비밀번호가 올바르지 않습니다.' }, 401);
       const sid = nanoid(32);
       await createSession({ id: sid, user_id: u.id, created_at: now() });
-      res.setHeader('Set-Cookie', `session=${sid}; Path=/; HttpOnly; Max-Age=2592000; SameSite=None; Secure`);
+      res.setHeader('Set-Cookie', `session=${sid}; Path=/; HttpOnly; Max-Age=2592000`);
       return json(res, { ok: true, user: { id: u.id, email: u.email, display_name: u.display_name, role: u.role } });
     }
 
     if (path === '/api/auth/logout' && m === 'POST') {
       const cookies = parseCookie(req.headers.cookie || '');
       if (cookies.session) await deleteSession(cookies.session);
-      res.setHeader('Set-Cookie', 'session=; Path=/; Max-Age=0; SameSite=None; Secure');
+      res.setHeader('Set-Cookie', 'session=; Path=/; Max-Age=0');
       return json(res, { ok: true });
     }
 
@@ -442,9 +373,10 @@ const server = http.createServer(async (req, res) => {
 
       if (parts[1] === 'posts' && parts[2] === 'following' && m === 'GET') {
         if (!world) return json(res, { error: 'Not found' }, 404);
+        if (!user) return json(res, { posts: [] });
         const qs = new URL(req.url, `http://localhost:${PORT}`).searchParams;
         const offset = parseInt(qs.get('offset') || '0');
-        const myChars = user ? await getCharsByUser(user.id, world.id) : [];
+        const myChars = await getCharsByUser(user.id, world.id);
         const myCharIds = myChars.map(c => c.id);
         if (!myCharIds.length) return json(res, { posts: [] });
         const pool = getDb();
@@ -452,12 +384,12 @@ const server = http.createServer(async (req, res) => {
           `SELECT following_character_id FROM follows WHERE follower_character_id = ANY($1)`, [myCharIds]
         ).then(r => r.rows.map(f => f.following_character_id));
         if (!followingIds.length) return json(res, { posts: [] });
-        const allPosts = await getPostsByWorld(world.id, 30, offset);
-        const posts = await Promise.all(
-          allPosts.filter(p => followingIds.includes(p.character_id))
-            .map(async p => ({ ...p, userReacted: (await Promise.all(myCharIds.map(cid => getReaction(p.id, cid)))).some(Boolean) }))
+        // DB에서 직접 팔로잉 포스트만 페이지네이션해서 가져옴
+        const posts = await getPostsByFollowing(world.id, followingIds, 30, offset);
+        const enriched = await Promise.all(
+          posts.map(async p => ({ ...p, userReacted: (await Promise.all(myCharIds.map(cid => getReaction(p.id, cid)))).some(Boolean) }))
         );
-        return json(res, { posts });
+        return json(res, { posts: enriched });
       }
 
       if (sub === 'characters') {
@@ -492,8 +424,6 @@ const server = http.createServer(async (req, res) => {
         }
         if (m === 'POST') {
           if (!user) return json(res, { error: 'Unauthorized' }, 401);
-          // 포스트 도배 방지: 유저당 20회/분
-          if (rateLimit(`post:${user.id}`, 20, 60000)) return json(res, { error: '너무 빠르게 게시글을 작성하고 있습니다.' }, 429);
           const b = await readBody(req);
           if (!b.content && !b.media_urls?.length) return json(res, { error: '내용을 입력해주세요.' }, 400);
           if (!b.character_id) return json(res, { error: '캐릭터를 선택해주세요.' }, 400);
