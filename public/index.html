@@ -702,29 +702,130 @@ input, textarea { font-family: var(--sans); color: var(--text); }
 
 /* ── 모바일 반응형 ── */
 @media (max-width: 700px) {
-  .main-wrap { flex-direction:column; }
-  .left-panel { width:100%; height:auto; flex-direction:row; padding:0; border-right:none; border-bottom:1px solid var(--border); position:sticky; top:0; z-index:100; background:var(--bg2); overflow-x:auto; gap:0; justify-content:space-around; flex-shrink:0; }
-  .left-panel .sb-logo { display:none; }
-  .left-panel .lnav-section { display:none; }
-  .left-panel .lnav-section-label { display:none; }
-  .left-panel .lnav-item { flex-direction:column; gap:2px; padding:8px 6px; border-radius:0; font-size:10px; flex:1; min-width:0; }
-  .left-panel .lnav-item i { font-size:20px; width:auto; }
-  .left-panel .lnav-item span:first-of-type { display:block; }
-  .left-panel .user-pill { display:none; }
-  .left-panel #user-menu { display:none; }
-  .side-col { display:none; }
-  .main-content { max-width:100%; border-left:none; border-right:none; }
-  .cust-panel { width:100%; top:auto; bottom:0; height:80vh; transform:translateY(100%); }
-  .cust-panel.open { transform:translateY(0); }
-  .view-thread, .view-char-profile { max-width:100%; }
-  .post-body { padding-left:46px; }
-  .media-grid { padding-left:46px; }
-  .post-actions { padding-left:46px; }
-  .main-layout { flex-direction:column; }
+  /* ── 전체 레이아웃 ── */
+  .main-wrap { flex-direction: column; }
+  .main-layout { flex-direction: column; }
+  .side-col { display: none; }
+  .feed-col { max-width: 100%; min-height: 0; }
+
+  /* ── 왼쪽 패널 → 하단 탭바로 변환 ── */
+  .left-panel {
+    width: 100% !important; min-width: unset !important; max-width: unset !important;
+    height: 56px; min-height: 56px;
+    flex-direction: row;
+    padding: 0; padding-bottom: env(safe-area-inset-bottom);
+    border-right: none; border-top: 1px solid var(--border);
+    position: fixed; bottom: 0; top: auto; left: 0; right: 0;
+    z-index: 200; overflow: visible;
+    justify-content: space-around; align-items: center;
+    gap: 0; background: var(--bg2);
+    box-shadow: 0 -1px 8px rgba(0,0,0,.08);
+  }
+  /* 하단 탭바에서 숨길 항목들 */
+  .left-panel .sb-logo,
+  .left-panel .sb-worlds,
+  .left-panel .sb-bottom,
+  .left-panel .lnav-section,
+  .left-panel .lnav-section-label,
+  .left-panel .user-pill,
+  .left-panel #nav-cust,
+  .left-panel #lnav-bookmark,
+  .left-panel #lnav-draft { display: none !important; }
+
+  /* 탭바 아이템 */
+  .left-panel .lnav-item {
+    flex-direction: column; gap: 2px; padding: 6px 4px 4px;
+    border-radius: 0; font-size: 10px;
+    flex: 1; min-width: 0; height: 100%;
+    justify-content: center; align-items: center;
+  }
+  .left-panel .lnav-item i { font-size: 22px; width: auto; }
+  .left-panel .lnav-item span:first-of-type { display: block; font-size: 10px; }
+  .left-panel .lnav-item.active { background: transparent; color: var(--accent); }
+  .lnav-badge { position: absolute; top: 6px; right: calc(50% - 16px); }
+
+  /* 피드 영역 하단 탭바 높이만큼 여백 */
+  .feed-col { padding-bottom: calc(56px + env(safe-area-inset-bottom)); }
+
+  /* ── 배너 ── */
+  .world-banner { height: 80px !important; }
+  .world-banner-content { padding: 10px 14px; }
+  .world-logo { width: 36px; height: 36px; font-size: 16px; }
+  .world-banner-name { font-size: 14px; }
+  .world-banner-sub { font-size: 11px; }
+  .btn-banner { padding: 4px 10px; font-size: 10px; }
+
+  /* ── 포스트 ── */
+  .post-body { padding-left: 46px; }
+  .media-grid { padding-left: 46px; }
+  .post-actions { padding-left: 46px; }
+  .post-av { width: 36px; height: 36px; font-size: 13px; }
+  .post-charname { font-size: 13px; }
+
+  /* ── 컴포즈 ── */
+  .compose-box { padding: 10px 12px; }
+
+  /* ── 패널들 (하단 시트로) ── */
+  .cust-panel, #personal-panel {
+    width: 100%; top: auto; bottom: 0; height: 85vh;
+    transform: translateY(100%);
+    border-radius: 16px 16px 0 0;
+    border-left: none; border-top: 1px solid var(--border);
+  }
+  .cust-panel.open, #personal-panel.open { transform: translateY(0); }
+
+  /* ── 모달 ── */
+  .modal-box {
+    width: 100% !important; max-width: 100% !important;
+    margin: 0; border-radius: 16px 16px 0 0;
+    position: fixed; bottom: 0; top: auto;
+    max-height: 90vh; overflow-y: auto;
+  }
+  .modal-overlay { align-items: flex-end; }
+
+  /* ── 캐릭터 탭 ── */
+  #char-detail-panel { width: 100% !important; border-left: none; border-top: 1px solid var(--border); }
+  #view-chars-standalone > div:nth-child(2) { flex-direction: column; height: auto; }
+
+  /* ── 스레드/프로필 ── */
+  .view-thread, #view-char-profile { max-width: 100%; }
+
+  /* ── DM ── */
+  .dm-layout { flex-direction: column; }
+  .dm-sidebar { width: 100%; border-right: none; border-bottom: 1px solid var(--border); max-height: 40vh; }
+
+  /* ── 우측 사이드바 대신 세계관 스위처 ── */
+  #world-mobile-bar { display: flex; }
 }
+
+/* 세계관 모바일 상단 바 (모바일 전용) */
+#world-mobile-bar {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  position: sticky; top: 0; z-index: 50;
+}
+#world-mobile-bar::-webkit-scrollbar { display: none; }
+.world-mobile-tab {
+  flex-shrink: 0; padding: 5px 12px;
+  border-radius: 20px; font-size: 12px; font-weight: 500;
+  background: var(--bg3); color: var(--text2); cursor: pointer;
+  border: 1.5px solid transparent; transition: all .12s;
+  white-space: nowrap;
+}
+.world-mobile-tab.active { background: var(--accent-bg); color: var(--accent); border-color: var(--accent); }
+
 @media (max-width: 480px) {
-  .left-panel .lnav-item span:first-of-type { display:none; }
-  .left-panel .lnav-item { padding:10px 4px; }
+  .left-panel .lnav-item span:first-of-type { display: none; }
+  .left-panel .lnav-item { padding: 8px 4px; }
+  .left-panel .lnav-item i { font-size: 24px; }
+  .post-av { width: 32px; height: 32px; }
+  .post-body, .media-grid, .post-actions { padding-left: 40px; }
+  .auth-card { padding: 28px 20px; }
 }
 
 </style>
@@ -804,6 +905,9 @@ input, textarea { font-family: var(--sans); color: var(--text); }
 
     <!-- CENTER FEED -->
     <main class="feed-col">
+
+      <!-- 모바일 세계관 스위처 (모바일에서만 표시) -->
+      <div id="world-mobile-bar"></div>
 
       <!-- 배너 (세계관 뷰에서만 표시) -->
       <div class="world-banner" id="world-banner" style="height:100px;display:none">
@@ -1776,6 +1880,15 @@ function renderWorldTabs() {
       <span style="font-size:14px;width:20px;text-align:center;flex-shrink:0">${w.icon_emoji || '🌍'}</span>
       <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${w.name}</span>
     </div>`).join('');
+  // 모바일 세계관 스위처 업데이트
+  const mbar = document.getElementById('world-mobile-bar');
+  if (mbar) {
+    mbar.innerHTML = appWorlds.map(w => `
+      <div class="world-mobile-tab ${currentWorld?.id === w.id ? 'active' : ''}" onclick="selectWorld(${JSON.stringify(w).replace(/"/g, '&quot;')})">
+        ${w.icon_emoji || '🌍'} ${w.name}
+      </div>`).join('') +
+      `<div class="world-mobile-tab" onclick="openNewWorldModal()" style="color:var(--text3)"><i class="ti ti-plus"></i></div>`;
+  }
 }
 
 async function selectWorld(world) {
