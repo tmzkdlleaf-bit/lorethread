@@ -210,6 +210,21 @@ const server = http.createServer(async (req, res) => {
       return json(res, { ok: true, urls: files.map(f => f.url) });
     }
 
+    // Cloudinary 직접 업로드용 서명 발급
+    if (path === '/api/upload/sign' && m === 'POST') {
+      if (!user) return json(res, { error: 'Unauthorized' }, 401);
+      const timestamp = Math.round(Date.now() / 1000);
+      const params = { folder: 'lorethread', timestamp, transformation: 'w_1280,c_limit,q_auto:good,f_auto' };
+      const signature = cloudinary.utils.api_sign_request(params, process.env.CLOUDINARY_API_SECRET);
+      return json(res, {
+        signature, timestamp,
+        api_key: process.env.CLOUDINARY_API_KEY,
+        cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+        folder: 'lorethread',
+        transformation: params.transformation,
+      });
+    }
+
     if (path === '/api/notifications' && m === 'GET') {
       if (!user) return json(res, { error: 'Unauthorized' }, 401);
       return json(res, { notifications: await getNotifs(user.id), unread: await getUnreadCount(user.id) });

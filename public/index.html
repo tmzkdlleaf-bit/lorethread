@@ -3597,17 +3597,19 @@ function insertText(t) {
 }
 
 // ── 이미지 압축 후 업로드 ──
-async function compressImage(file, maxWidth = 1920, quality = 0.85) {
+async function compressImage(file, maxWidth = 1280, quality = 0.78) {
   if (!file.type.startsWith('image/') || file.type === 'image/gif') return file;
   return new Promise(resolve => {
     const img = new Image();
     const url = URL.createObjectURL(file);
     img.onload = () => {
       URL.revokeObjectURL(url);
+      // 이미 작은 이미지는 압축 스킵
+      if (img.width <= maxWidth && file.size < 300 * 1024) return resolve(file);
       const scale = Math.min(1, maxWidth / img.width);
       const canvas = document.createElement('canvas');
-      canvas.width = img.width * scale;
-      canvas.height = img.height * scale;
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
       canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
       canvas.toBlob(blob => resolve(new File([blob], file.name, { type: 'image/jpeg' })), 'image/jpeg', quality);
     };
@@ -3615,15 +3617,49 @@ async function compressImage(file, maxWidth = 1920, quality = 0.85) {
   });
 }
 
+// Cloudinary 서명 캐시 (1분)
+let _cdnSign = null;
+let _cdnSignTs = 0;
+async function getCdnSign() {
+  if (_cdnSign && Date.now() - _cdnSignTs < 55000) return _cdnSign;
+  const res = await fetch(API_BASE + '/api/upload/sign', { method: 'POST', credentials: 'include' });
+  _cdnSign = await res.json();
+  _cdnSignTs = Date.now();
+  return _cdnSign;
+}
+
 async function uploadFiles(files) {
-  // 병렬 업로드
   const results = await Promise.all(files.map(async file => {
-    const compressed = await compressImage(file);
-    const form = new FormData();
-    form.append('file', compressed);
-    const res = await fetch(API_BASE + '/api/upload', { method: 'POST', body: form, credentials: 'include' });
-    const data = await res.json();
-    return data.urls?.[0] || null;
+    try {
+      const isVideo = file.type.startsWith('video/');
+      const compressed = isVideo ? file : await compressImage(file);
+
+      // Cloudinary 직접 업로드 (Railway 서버 경유 없음)
+      const sign = await getCdnSign();
+      if (sign?.cloud_name) {
+        const form = new FormData();
+        form.append('file', compressed);
+        form.append('api_key', sign.api_key);
+        form.append('timestamp', sign.timestamp);
+        form.append('signature', sign.signature);
+        form.append('folder', sign.folder);
+        if (!isVideo) form.append('transformation', sign.transformation);
+        const res = await fetch(
+          `https://api.cloudinary.com/v1_1/${sign.cloud_name}/${isVideo ? 'video' : 'image'}/upload`,
+          { method: 'POST', body: form }
+        );
+        const data = await res.json();
+        return data.secure_url || null;
+      }
+      // 폴백: 기존 방식 (서명 실패 시)
+      const form = new FormData();
+      form.append('file', compressed);
+      const res = await fetch(API_BASE + '/api/upload', { method: 'POST', body: form, credentials: 'include' });
+      const data = await res.json();
+      return data.urls?.[0] || null;
+    } catch {
+      return null;
+    }
   }));
   return results.filter(Boolean);
 }
