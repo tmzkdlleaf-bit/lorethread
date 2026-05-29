@@ -32,6 +32,8 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
+const ALLOWED_UPLOAD_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.mp4', '.webm']);
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50MB
 const UPLOADS_DIR = join(__dirname, '../tmp_uploads');
 if (!existsSync(UPLOADS_DIR)) mkdirSync(UPLOADS_DIR, { recursive: true });
 
@@ -77,7 +79,9 @@ async function readMultipart(req) {
           const data = part.slice(he + 4);
           const fn = hdr.match(/filename="([^"]+)"/)?.[1];
           if (fn) {
-            const ext = extname(fn) || '.bin';
+            const ext = extname(fn).toLowerCase() || '.bin';
+            if (!ALLOWED_UPLOAD_EXTS.has(ext)) continue;
+            if (data.length > MAX_UPLOAD_BYTES) continue;
             const tmpPath = join(UPLOADS_DIR, nanoid() + ext);
             writeFileSync(tmpPath, data);
             try {
@@ -110,7 +114,7 @@ async function getSessionUser(req) {
     if (!sid) return null;
     const sess = await getSession(sid);
     if (!sess) return null;
-    return getUser(sess.user_id);
+    return await getUser(sess.user_id);
   } catch { return null; }
 }
 
@@ -237,16 +241,18 @@ const server = http.createServer(async (req, res) => {
 
     // ── 계정 전환 ──
     if (path === '/api/accounts' && m === 'GET') {
+      if (!user) return json(res, { error: 'Unauthorized' }, 401);
       const pool = getDb();
       const sessions = await pool.query('SELECT DISTINCT user_id FROM sessions').then(r => r.rows);
       const seen = new Set();
-      const accounts = (await Promise.all(sessions.map(s => getUser(s.user_id)))).filter(u => {
+      const accounts = (await Promise.all(sessions.map(s => await getUser(s.user_id)))).filter(u => {
         if (!u || seen.has(u.id)) return false;
         seen.add(u.id); return true;
       }).map(u => ({ user_id: u.id, display_name: u.display_name, email: u.email, role: u.role }));
       return json(res, { accounts });
     }
     if (path === '/api/accounts/switch' && m === 'POST') {
+      if (!user) return json(res, { error: 'Unauthorized' }, 401);
       const b = await readBody(req);
       const target = await getUser(b.user_id);
       if (!target) return json(res, { error: '계정을 찾을 수 없습니다.' }, 404);
@@ -314,6 +320,8 @@ const server = http.createServer(async (req, res) => {
         await pool.query('DELETE FROM events WHERE world_id=$1', [world.id]);
         await pool.query('DELETE FROM invites WHERE world_id=$1', [world.id]);
         await pool.query('DELETE FROM worlds WHERE id=$1', [world.id]);
+        // 알림 고아 레코드 정리
+        await pool.query('DELETE FROM notifications WHERE post_id IN (SELECT id FROM posts WHERE world_id=$1)', [world.id]);
         return json(res, { ok: true });
       }
 
@@ -435,9 +443,8 @@ const server = http.createServer(async (req, res) => {
           const tag = qs.get('tag') || '';
           const myChars = user ? await getCharsByUser(user.id, world.id) : [];
           const myCharIds = myChars.map(c => c.id);
-          let posts = await getPostsByWorld(world.id, 30, offset);
+          let posts = await getPostsByWorld(world.id, 30, offset, tag);
           posts = await Promise.all(posts.map(async p => ({ ...p, userReacted: (await Promise.all(myCharIds.map(cid => getReaction(p.id, cid)))).some(Boolean) })));
-          if (tag) posts = posts.filter(p => p.content?.toLowerCase().includes('#' + tag.toLowerCase()));
           return json(res, { posts });
         }
         if (m === 'POST') {
@@ -488,8 +495,11 @@ const server = http.createServer(async (req, res) => {
       const sub = parts[1] || '';
 
       if (sub === 'is-following' && m === 'GET') {
+        if (!user) return json(res, { error: 'Unauthorized' }, 401);
         const qs = new URL(req.url, `http://localhost:${PORT}`).searchParams;
         const myCharId = qs.get('character_id');
+        const myChar = await getCharById(myCharId);
+        if (!myChar || myChar.user_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
         const pool = getDb();
         const following = await pool.query('SELECT 1 FROM follows WHERE follower_character_id=$1 AND following_character_id=$2', [myCharId, charId]).then(r => r.rows.length > 0);
         return json(res, { following });
