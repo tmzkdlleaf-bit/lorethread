@@ -2741,7 +2741,7 @@ function renderCharsGrid() {
       </div>
       <div class="char-card-body">
         <div class="char-card-name">${escapeHtml(c.name)}</div>
-        <div class="char-card-role">${escapeHtml(c.role||'역할 없음')</div>
+        <div class="char-card-role">${escapeHtml(c.role||'역할 없음')}</div>
         <div class="char-card-player"></div>
       </div>
       <div class="char-card-footer">
@@ -2803,7 +2803,7 @@ function renderCharProfile(c, posts, followers, following) {
           : `<button class="btn ${c.isFollowed?'btn-primary':'btn-ghost'}" id="follow-btn-${c.id}" style="font-size:12px" onclick="event.stopPropagation();toggleFollow('${c.id}',myChars[0]?.id)">${c.isFollowed?'팔로잉':'팔로우'}</button>`}
       </div>
       <div class="char-profile-name">${escapeHtml(c.name)}</div>
-      <div class="char-profile-role">${escapeHtml(c.role||'')</div>
+      <div class="char-profile-role">${escapeHtml(c.role||'')}</div>
       <div class="char-profile-player"><i class="ti ti-user" style="font-size:11px"></i> @${c.handle}</div>
       <div class="char-profile-stats">
         <div class="char-profile-stat"><div class="char-profile-stat-n">${posts?.length||0}</div><div class="char-profile-stat-l">포스트</div></div>
@@ -4512,7 +4512,7 @@ function renderCharsStandalone(q = '') {
       </div>
       <div class="char-card-body">
         <div class="char-card-name">${escapeHtml(c.name)}</div>
-        <div class="char-card-role">${escapeHtml(c.role||'역할 없음')</div>
+        <div class="char-card-role">${escapeHtml(c.role||'역할 없음')}</div>
         <div class="char-card-player"></div>
       </div>
       <div class="char-card-footer">
@@ -4565,7 +4565,7 @@ async function openCharDetail(charId) {
       <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px">
         <div>
           <div style="font-size:17px;font-weight:600;font-family:var(--serif)">${escapeHtml(c.name)}</div>
-          <div style="font-size:12px;color:var(--text2);margin-top:2px">${escapeHtml(c.role||'')</div>
+          <div style="font-size:12px;color:var(--text2);margin-top:2px">${escapeHtml(c.role||'')}</div>
           <div style="font-size:11px;color:var(--text3);margin-top:1px">@${escapeHtml(c.handle)}</div>
         </div>
         ${isOwn
