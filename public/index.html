@@ -1949,7 +1949,7 @@ function renderWorldTabs() {
   if (container) container.innerHTML = appWorlds.map(w => `
     <div class="world-tab ${currentWorld?.id === w.id ? 'active' : ''}" onclick="selectWorld(${JSON.stringify(w).replace(/"/g, '&quot;')})">
       <span class="world-tab-icon">${w.icon_emoji || '🌍'}</span>
-      <span>${w.name}</span>
+      <span>${escapeHtml(w.name)}</span>
     </div>`).join('') +
     `<div class="world-tab-add" onclick="openNewWorldModal()" title="새 세계관"><i class="ti ti-plus"></i></div>`;
   // 왼쪽 패널 세계관 목록도 업데이트
@@ -1957,7 +1957,7 @@ function renderWorldTabs() {
   if (lnav) lnav.innerHTML = appWorlds.map(w => `
     <div class="lnav-world-item ${currentWorld?.id === w.id ? 'active' : ''}" onclick="selectWorld(${JSON.stringify(w).replace(/"/g, '&quot;')})">
       <span style="font-size:14px;width:20px;text-align:center;flex-shrink:0">${w.icon_emoji || '🌍'}</span>
-      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${w.name}</span>
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(w.name)}</span>
     </div>`).join('');
   // 모바일 세계관 스위처 업데이트
   const mbar = document.getElementById('world-mobile-bar');
@@ -2071,7 +2071,7 @@ function renderComposeChar() {
   dd.innerHTML = myChars.map(c => `
     <div class="char-option" onclick="selectComposeChar('${c.id}')">
       <div class="char-option-av" style="background:${c.color_bg};color:${c.color_fg}">${c.avatar_url ? `<img src="${c.avatar_url}" alt="">` : c.name[0]}</div>
-      <div><div class="char-option-name">${c.name}</div><div class="char-option-role">${c.role || ''}</div></div>
+      <div><div class="char-option-name">${escapeHtml(c.name)}</div><div class="char-option-role">${c.role || ''}</div></div>
     </div>`).join('');
 }
 
@@ -2092,7 +2092,7 @@ function renderSideMyChars() {
   el.innerHTML = myChars.map(c => `
     <div class="side-chr" onclick="openCharProfile('${c.id}')">
       <div class="side-chr-av" style="background:${c.color_bg};color:${c.color_fg}">${c.avatar_url ? `<img src="${c.avatar_url}" alt="">` : c.name[0]}</div>
-      <div><div class="side-chr-name">${c.name}</div><div class="side-chr-role">${c.role || ''}</div></div>
+      <div><div class="side-chr-name">${escapeHtml(c.name)}</div><div class="side-chr-role">${c.role || ''}</div></div>
       <div class="side-odot"></div>
     </div>`).join('');
 }
@@ -2262,8 +2262,8 @@ function renderPost(p, isReply = false) {
         <div onclick="openCharProfile('${p.character_id}');event.stopPropagation()">${avEl(p)}</div>
         <div class="post-meta">
           <div class="post-char-strip">
-            <span class="post-charname" onclick="openCharProfile('${p.character_id}');event.stopPropagation()">${p.char_name}</span>
-            <span class="post-handle">@${p.char_handle}</span>
+            <span class="post-charname" onclick="openCharProfile('${p.character_id}');event.stopPropagation()">${escapeHtml(p.char_name)}</span>
+            <span class="post-handle">@${escapeHtml(p.char_handle)}</span>
             
             <span class="post-time" style="margin-left:auto">${p.edited_at ? '<span style="font-size:10px;color:var(--text3);margin-right:3px">(수정됨)</span>' : ''}${relativeTime(p.created_at)}</span>
           </div>
@@ -2286,11 +2286,28 @@ function renderPost(p, isReply = false) {
     </div>`;
 }
 
+// XSS 방어: HTML 특수문자 이스케이프
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function formatContent(text) {
-  return text
+  if (!text) return '';
+  // 먼저 HTML 이스케이프 처리
+  const escaped = escapeHtml(text);
+  // 그 후 안전한 마크업만 허용
+  return escaped
     .replace(/\*(.*?)\*/g, '<em>$1</em>')
-    .replace(/@([a-z0-9_가-힣]+)/gi, '<span class="mention" onclick="event.stopPropagation();findCharByHandle(\'$1\')">@$1</span>')
-    .replace(/#([^\s#]+)/g, '<span class="hashtag" onclick="event.stopPropagation();openHashtagFeed(\'$1\')">#$1</span>')
+    .replace(/@([a-z0-9_가-힣]+)/gi, (_, handle) =>
+      `<span class="mention" onclick="event.stopPropagation();findCharByHandle('${escapeHtml(handle)}')">@${escapeHtml(handle)}</span>`)
+    .replace(/#([^\s#&<>]+)/g, (_, tag) =>
+      `<span class="hashtag" onclick="event.stopPropagation();openHashtagFeed('${escapeHtml(tag)}')">#${escapeHtml(tag)}</span>`)
     .replace(/\n/g, '<br>');
 }
 
@@ -2723,8 +2740,8 @@ function renderCharsGrid() {
         <div class="online-dot online"></div>
       </div>
       <div class="char-card-body">
-        <div class="char-card-name">${c.name}</div>
-        <div class="char-card-role">${c.role||'역할 없음'}</div>
+        <div class="char-card-name">${escapeHtml(c.name)}</div>
+        <div class="char-card-role">${escapeHtml(c.role||'역할 없음'}</div>
         <div class="char-card-player"></div>
       </div>
       <div class="char-card-footer">
@@ -2785,15 +2802,15 @@ function renderCharProfile(c, posts, followers, following) {
              </div>`
           : `<button class="btn ${c.isFollowed?'btn-primary':'btn-ghost'}" id="follow-btn-${c.id}" style="font-size:12px" onclick="event.stopPropagation();toggleFollow('${c.id}',myChars[0]?.id)">${c.isFollowed?'팔로잉':'팔로우'}</button>`}
       </div>
-      <div class="char-profile-name">${c.name}</div>
-      <div class="char-profile-role">${c.role||''}</div>
+      <div class="char-profile-name">${escapeHtml(c.name)}</div>
+      <div class="char-profile-role">${escapeHtml(c.role||''}</div>
       <div class="char-profile-player"><i class="ti ti-user" style="font-size:11px"></i> @${c.handle}</div>
       <div class="char-profile-stats">
         <div class="char-profile-stat"><div class="char-profile-stat-n">${posts?.length||0}</div><div class="char-profile-stat-l">포스트</div></div>
         <div class="char-profile-stat"><div class="char-profile-stat-n" id="follower-count-${c.id}">${followers||0}</div><div class="char-profile-stat-l">팔로워</div></div>
         <div class="char-profile-stat"><div class="char-profile-stat-n">${following||0}</div><div class="char-profile-stat-l">팔로잉</div></div>
       </div>
-      ${c.bio ? `<div class="char-profile-bio">${c.bio}</div>` : ''}
+      ${c.bio ? `<div class="char-profile-bio">${escapeHtml(c.bio)}</div>` : ''}
     </div>
     <div class="char-profile-tabs" id="cp-tabs">
       <div class="itab active" onclick="switchCpTab('cp-posts',this)">게시글</div>
@@ -3773,8 +3790,8 @@ function showMentionDropdown(ta, chars, trigger) {
         ${c.avatar_url ? `<img src="${c.avatar_url}" style="width:100%;height:100%;object-fit:cover" alt="">` : c.name[0]}
       </div>
       <div>
-        <div style="font-size:12px;font-weight:500">${c.name}</div>
-        <div style="font-size:11px;color:var(--text3)">@${c.handle}</div>
+        <div style="font-size:12px;font-weight:500">${escapeHtml(c.name)}</div>
+        <div style="font-size:11px;color:var(--text3)">@${escapeHtml(c.handle)}</div>
       </div>
     </div>`).join('');
   dd.style.display = 'block';
@@ -4139,7 +4156,7 @@ async function openRoom(roomId) {
     if (!dmSelectedCharId) dmSelectedCharId = myChars[0].id;
     charSel.innerHTML = `<span>캐릭터:</span>
       <select onchange="dmSelectedCharId=this.value">
-        ${myChars.map(c => `<option value="${c.id}" ${dmSelectedCharId===c.id?'selected':''}>${c.name}</option>`).join('')}
+        ${myChars.map(c => `<option value="${c.id}" ${dmSelectedCharId===c.id?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}
       </select>`;
     charSel.style.display = 'flex';
   } else {
@@ -4494,8 +4511,8 @@ function renderCharsStandalone(q = '') {
         <div class="char-card-av" style="background:${c.color_bg};color:${c.color_fg}">${c.avatar_url?`<img src="${c.avatar_url}" alt="">`:c.name[0]}</div>
       </div>
       <div class="char-card-body">
-        <div class="char-card-name">${c.name}</div>
-        <div class="char-card-role">${c.role||'역할 없음'}</div>
+        <div class="char-card-name">${escapeHtml(c.name)}</div>
+        <div class="char-card-role">${escapeHtml(c.role||'역할 없음'}</div>
         <div class="char-card-player"></div>
       </div>
       <div class="char-card-footer">
@@ -4547,9 +4564,9 @@ async function openCharDetail(charId) {
       <!-- 이름/역할 + 버튼 -->
       <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px">
         <div>
-          <div style="font-size:17px;font-weight:600;font-family:var(--serif)">${c.name}</div>
-          <div style="font-size:12px;color:var(--text2);margin-top:2px">${c.role||''}</div>
-          <div style="font-size:11px;color:var(--text3);margin-top:1px">@${c.handle}</div>
+          <div style="font-size:17px;font-weight:600;font-family:var(--serif)">${escapeHtml(c.name)}</div>
+          <div style="font-size:12px;color:var(--text2);margin-top:2px">${escapeHtml(c.role||''}</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:1px">@${escapeHtml(c.handle)}</div>
         </div>
         ${isOwn
           ? `<button class="btn btn-ghost" style="font-size:12px" onclick="editChar('${c.id}')"><i class="ti ti-edit"></i> 편집</button>`
@@ -4557,7 +4574,7 @@ async function openCharDetail(charId) {
       </div>
 
       <!-- 소개 -->
-      ${c.bio ? `<div style="font-size:13px;color:var(--text2);line-height:1.75;margin-bottom:14px;padding:10px 12px;background:var(--bg3);border-radius:var(--radius-sm);white-space:pre-wrap">${c.bio}</div>` : ''}
+      ${c.bio ? `<div style="font-size:13px;color:var(--text2);line-height:1.75;margin-bottom:14px;padding:10px 12px;background:var(--bg3);border-radius:var(--radius-sm);white-space:pre-wrap">${escapeHtml(c.bio)}</div>` : ''}
 
       <!-- 섹션들 -->
       ${sections.map(s => `
@@ -4640,7 +4657,7 @@ async function loadAnnounceTab() {
     <div class="post" onclick="openAnnounceModal('${a.id}')" data-ann-id="${a.id}">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
         <div style="flex:1">
-          <div style="font-size:14px;font-weight:600;margin-bottom:4px">${a.title}</div>
+          <div style="font-size:14px;font-weight:600;margin-bottom:4px">${escapeHtml(a.title)}</div>
           <div style="font-size:12px;color:var(--text3)">${relativeTime(a.created_at)}</div>
         </div>
         <div style="display:flex;gap:4px;flex-shrink:0">

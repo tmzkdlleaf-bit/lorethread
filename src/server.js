@@ -95,7 +95,7 @@ async function readMultipart(req) {
                   { fetch_format: 'auto' },           // WebP 등 최적 포맷 자동 선택
                 ],
               });
-              uploads.push({ url: result.secure_url });
+              uploads.push({ url: result.secure_url, size: part.length, type: ct });
             } finally {
               try { unlinkSync(tmpPath); } catch {}
             }
@@ -215,7 +215,25 @@ const server = http.createServer(async (req, res) => {
 
     if (path === '/api/upload' && m === 'POST') {
       if (!user) return json(res, { error: 'Unauthorized' }, 401);
+      // 요청 크기 제한 (10MB)
+      const contentLength = parseInt(req.headers['content-length'] || '0');
+      if (contentLength > 10 * 1024 * 1024) {
+        return json(res, { error: '파일 크기는 10MB를 초과할 수 없습니다.' }, 413);
+      }
       const { files } = await readMultipart(req);
+      // 각 파일 크기 검사
+      for (const f of files) {
+        if (f.size && f.size > 10 * 1024 * 1024) {
+          return json(res, { error: '파일 크기는 10MB를 초과할 수 없습니다.' }, 413);
+        }
+      }
+      // 허용 타입 검사
+      const allowedTypes = ['image/jpeg','image/png','image/gif','image/webp','video/mp4','video/webm'];
+      for (const f of files) {
+        if (f.type && !allowedTypes.includes(f.type)) {
+          return json(res, { error: '지원하지 않는 파일 형식입니다.' }, 415);
+        }
+      }
       return json(res, { ok: true, urls: files.map(f => f.url) });
     }
 
