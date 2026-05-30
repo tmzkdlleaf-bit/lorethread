@@ -1,4 +1,5 @@
 import pg from 'pg';
+import { nanoid } from 'nanoid';
 const { Pool } = pg;
 
 const pool = new Pool({
@@ -47,6 +48,9 @@ export async function initDb() {
     CREATE TABLE IF NOT EXISTS dm_room_members (room_id TEXT NOT NULL, user_id TEXT NOT NULL, character_id TEXT, joined_at TEXT NOT NULL, PRIMARY KEY (room_id, user_id));
     CREATE TABLE IF NOT EXISTS dm_messages (id TEXT PRIMARY KEY, room_id TEXT NOT NULL, sender_user_id TEXT NOT NULL, character_id TEXT, content TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS dm_reads (user_id TEXT NOT NULL, room_id TEXT NOT NULL, last_read_at TEXT NOT NULL, PRIMARY KEY (user_id, room_id));
+    CREATE TABLE IF NOT EXISTS world_admins (world_id TEXT NOT NULL, user_id TEXT NOT NULL, granted_at TEXT NOT NULL, PRIMARY KEY (world_id, user_id));
+    ALTER TABLE posts ADD COLUMN IF NOT EXISTS is_sensitive INTEGER DEFAULT 0;
+    ALTER TABLE posts ADD COLUMN IF NOT EXISTS force_sensitive INTEGER DEFAULT 0;
   `);
   console.log('✓ DB tables ready');
   // 인덱스 (없으면 생성, 있으면 무시)
@@ -84,9 +88,7 @@ export async function initDb() {
 }
 
 export function now() { return new Date().toISOString(); }
-function rndId() { return Math.random().toString(36).slice(2)+Math.random().toString(36).slice(2); }
 export function getDb() { return pool; }
-export function persist() {}
 
 // ── User ──
 export async function getUser(id) { return q('SELECT * FROM users WHERE id = ?').get(id); }
@@ -160,12 +162,12 @@ export async function updateChar(id,fields) {
 export async function getCharSections(cid) { return pool.query('SELECT * FROM char_sections WHERE character_id=$1 ORDER BY sort_order',[cid]).then(r=>r.rows); }
 export async function setCharSections(cid,sections) {
   await pool.query('DELETE FROM char_sections WHERE character_id=$1',[cid]);
-  for(let i=0;i<sections.length;i++) await pool.query('INSERT INTO char_sections (id,character_id,title,content,sort_order) VALUES ($1,$2,$3,$4,$5)',[rndId(),cid,sections[i].title,sections[i].content||'',i]);
+  for(let i=0;i<sections.length;i++) await pool.query('INSERT INTO char_sections (id,character_id,title,content,sort_order) VALUES ($1,$2,$3,$4,$5)',[nanoid(),cid,sections[i].title,sections[i].content||'',i]);
 }
 export async function getCharLinks(cid) { return pool.query('SELECT * FROM char_links WHERE character_id=$1 ORDER BY sort_order',[cid]).then(r=>r.rows); }
 export async function setCharLinks(cid,links) {
   await pool.query('DELETE FROM char_links WHERE character_id=$1',[cid]);
-  for(let i=0;i<links.length;i++){const l=links[i]; await pool.query('INSERT INTO char_links (id,character_id,label,url,icon,link_type,note_content,sort_order) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',[rndId(),cid,l.label,l.url||'',l.icon||'ti-link',l.link_type||'link',l.note_content||'',i]);}
+  for(let i=0;i<links.length;i++){const l=links[i]; await pool.query('INSERT INTO char_links (id,character_id,label,url,icon,link_type,note_content,sort_order) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',[nanoid(),cid,l.label,l.url||'',l.icon||'ti-link',l.link_type||'link',l.note_content||'',i]);}
 }
 
 // ── Post ──
@@ -219,10 +221,12 @@ export async function createPost(p) {
 export async function getPostById(id) {
   return enrichPost(id);
 }
-export async function getPostsByWorld(wid,limit=30,offset=0) {
+export async function getPostsByWorld(wid,limit=30,offset=0,tag='') {
+  const tagFilter = tag ? ` AND LOWER(p.content) LIKE $4` : '';
+  const params = tag ? [wid, limit, offset, `%#${tag.toLowerCase()}%`] : [wid, limit, offset];
   const { rows } = await pool.query(
-    POST_SELECT + ` WHERE p.world_id = $1 AND p.reply_to_id IS NULL GROUP BY p.id, c.name, c.handle, c.color_bg, c.color_fg, c.avatar_url, c.user_id, u.display_name ORDER BY p.created_at DESC LIMIT $2 OFFSET $3`,
-    [wid, limit, offset]
+    POST_SELECT + ` WHERE p.world_id = $1 AND p.reply_to_id IS NULL${tagFilter} GROUP BY p.id, c.name, c.handle, c.color_bg, c.color_fg, c.avatar_url, c.user_id, u.display_name ORDER BY p.created_at DESC LIMIT $2 OFFSET $3`,
+    params
   );
   return attachMedia(rows);
 }
@@ -243,11 +247,20 @@ export async function getReplies(pid) {
   return attachMedia(rows);
 }
 export async function deletePost(id) {
-  const replies = await pool.query('SELECT id FROM posts WHERE reply_to_id=$1',[id]).then(r=>r.rows);
-  for(const r of replies) await deletePost(r.id);
-  await pool.query('DELETE FROM post_media WHERE post_id=$1',[id]);
-  await pool.query('DELETE FROM reactions WHERE post_id=$1',[id]);
-  await pool.query('DELETE FROM posts WHERE id=$1',[id]);
+  // WITH RECURSIVE로 모든 하위 답글 ID를 한 번에 수집 후 일괄 삭제
+  const { rows } = await pool.query(`
+    WITH RECURSIVE tree AS (
+      SELECT id FROM posts WHERE id = $1
+      UNION ALL
+      SELECT p.id FROM posts p JOIN tree t ON p.reply_to_id = t.id
+    ) SELECT id FROM tree
+  `, [id]);
+  const ids = rows.map(r => r.id);
+  if (!ids.length) return;
+  await pool.query('DELETE FROM post_media WHERE post_id = ANY($1)', [ids]);
+  await pool.query('DELETE FROM reactions WHERE post_id = ANY($1)', [ids]);
+  await pool.query('DELETE FROM notifications WHERE post_id = ANY($1)', [ids]);
+  await pool.query('DELETE FROM posts WHERE id = ANY($1)', [ids]);
 }
 export async function getPostsByChar(cid,limit=30) {
   const { rows } = await pool.query(
@@ -314,19 +327,62 @@ export async function getDmMessages(rid,limit=60) {
   return pool.query(`SELECT m.*,u.display_name,c.name as char_name,c.color_bg as char_color_bg,c.color_fg as char_color_fg,c.avatar_url as char_avatar,c.role as char_role FROM dm_messages m JOIN users u ON u.id=m.sender_user_id LEFT JOIN characters c ON c.id=m.character_id WHERE m.room_id=$1 ORDER BY m.created_at ASC`,[rid]).then(r=>r.rows.slice(-limit));
 }
 export async function getUnreadDmCount(uid) {
-  const reads=await pool.query('SELECT room_id,last_read_at FROM dm_reads WHERE user_id=$1',[uid]).then(r=>r.rows);
-  const readMap=Object.fromEntries(reads.map(r=>[r.room_id,r.last_read_at]));
-  const rooms=await pool.query('SELECT room_id FROM dm_room_members WHERE user_id=$1',[uid]).then(r=>r.rows);
-  let total=0;
-  for(const {room_id} of rooms){
-    const row=await pool.query('SELECT COUNT(*) as cnt FROM dm_messages WHERE room_id=$1 AND sender_user_id!=$2 AND created_at>$3',[room_id,uid,readMap[room_id]||'']).then(r=>r.rows[0]);
-    total+=parseInt(row?.cnt||0);
-  }
-  return total;
+  const { rows } = await pool.query(`
+    SELECT COUNT(*) as cnt
+    FROM dm_messages msg
+    JOIN dm_room_members mem ON mem.room_id = msg.room_id AND mem.user_id = $1
+    LEFT JOIN dm_reads dr ON dr.user_id = $1 AND dr.room_id = msg.room_id
+    WHERE msg.sender_user_id != $1
+      AND msg.created_at > COALESCE(dr.last_read_at, '')
+  `, [uid]);
+  return parseInt(rows[0]?.cnt || 0);
 }
 export async function markDmRead(uid,rid) {
   await pool.query('INSERT INTO dm_reads (user_id,room_id,last_read_at) VALUES ($1,$2,$3) ON CONFLICT (user_id,room_id) DO UPDATE SET last_read_at=$3',[uid,rid,now()]);
 }
 export async function findDmRoom(uidA,uidB) {
   return pool.query(`SELECT r.* FROM dm_rooms r JOIN dm_room_members a ON a.room_id=r.id AND a.user_id=$1 JOIN dm_room_members b ON b.room_id=r.id AND b.user_id=$2 WHERE r.type='dm' AND (SELECT COUNT(*) FROM dm_room_members WHERE room_id=r.id)=2 LIMIT 1`,[uidA,uidB]).then(r=>r.rows[0]||null);
+}
+
+// ── 세계관 관리자 ──
+export async function getWorldAdmins(worldId) {
+  return pool.query(
+    `SELECT wa.*, u.display_name FROM world_admins wa
+     JOIN users u ON u.id = wa.user_id WHERE wa.world_id = $1`, [worldId]
+  ).then(r => r.rows);
+}
+export async function setWorldAdmin(worldId, userId, isAdmin) {
+  if (isAdmin) {
+    await pool.query(
+      'INSERT INTO world_admins (world_id, user_id, granted_at) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
+      [worldId, userId, now()]
+    );
+  } else {
+    await pool.query('DELETE FROM world_admins WHERE world_id=$1 AND user_id=$2', [worldId, userId]);
+  }
+}
+
+// ── 계정 탈퇴 ──
+export async function deleteUserAccount(userId) {
+  // 유저의 캐릭터 찾기
+  const { rows: chars } = await pool.query('SELECT id FROM characters WHERE user_id=$1', [userId]);
+  for (const c of chars) {
+    const { rows: posts } = await pool.query('SELECT id FROM posts WHERE character_id=$1', [c.id]);
+    for (const p of posts) {
+      await pool.query('DELETE FROM post_media WHERE post_id=$1', [p.id]);
+      await pool.query('DELETE FROM reactions WHERE post_id=$1', [p.id]);
+      await pool.query('DELETE FROM notifications WHERE post_id=$1', [p.id]);
+    }
+    await pool.query('DELETE FROM posts WHERE character_id=$1', [c.id]);
+    await pool.query('DELETE FROM char_sections WHERE character_id=$1', [c.id]);
+    await pool.query('DELETE FROM char_links WHERE character_id=$1', [c.id]);
+    await pool.query('DELETE FROM follows WHERE follower_character_id=$1 OR following_character_id=$1', [c.id]);
+  }
+  await pool.query('DELETE FROM characters WHERE user_id=$1', [userId]);
+  await pool.query('DELETE FROM world_members WHERE user_id=$1', [userId]);
+  await pool.query('DELETE FROM world_admins WHERE user_id=$1', [userId]);
+  await pool.query('DELETE FROM dm_room_members WHERE user_id=$1', [userId]);
+  await pool.query('DELETE FROM sessions WHERE user_id=$1', [userId]);
+  await pool.query('DELETE FROM notifications WHERE recipient_user_id=$1', [userId]);
+  await pool.query('DELETE FROM users WHERE id=$1', [userId]);
 }

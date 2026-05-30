@@ -2,7 +2,12 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta property="og:title" content="Lorethread">
+  <meta property="og:description" content="롤플레잉 특화 SNS">
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary">
+  <meta name="theme-color" content="#185FA5">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Lorethread</title>
 <!-- preconnect으로 DNS/TCP를 미리 열어둠 -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -829,6 +834,48 @@ input, textarea { font-family: var(--sans); color: var(--text); }
   .auth-card { padding: 28px 20px; }
 }
 
+
+/* ── 블러 콘텐츠 ── */
+.post-blur-wrap { position: relative; }
+.post-blur-content { filter: blur(12px); pointer-events: none; user-select: none; transition: filter .2s; }
+.post-blur-overlay {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 6px; cursor: pointer; z-index: 2;
+}
+.post-blur-overlay .blur-label {
+  font-size: 12px; font-weight: 500; color: var(--text2);
+  background: var(--bg2); border: 1px solid var(--border2);
+  padding: 4px 12px; border-radius: 20px;
+}
+.post-blur-wrap.revealed .post-blur-content { filter: none; pointer-events: auto; }
+.post-blur-wrap.revealed .post-blur-overlay { display: none; }
+.compose-sensitive { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text3); cursor: pointer; padding: 4px 0; }
+.compose-sensitive input { width: 14px; height: 14px; cursor: pointer; }
+.sensitive-badge { font-size: 10px; padding: 1px 6px; border-radius: 20px; background: #fff3e0; color: #e65100; border: 1px solid #ffcc80; font-weight: 600; vertical-align: middle; margin-left: 4px; }
+[data-theme="dark"] .sensitive-badge { background: #2a1500; color: #ff9800; border-color: #5a3000; }
+
+/* ── 관리자 역할 ── */
+.admin-tag { font-size: 10px; padding: 2px 7px; border-radius: 20px; background: #fce4ec; color: #c62828; font-weight: 600; }
+[data-theme="dark"] .admin-tag { background: #2a0a0a; color: #ef9a9a; }
+.world-admin-tag { font-size: 10px; padding: 1px 6px; border-radius: 20px; background: #e3f2fd; color: #1565c0; border: 1px solid #90caf9; font-weight: 600; }
+[data-theme="dark"] .world-admin-tag { background: #0a1a2a; color: #90caf9; border-color: #1a3a5a; }
+
+/* ── 법적 페이지 ── */
+.legal-page { max-width: 680px; margin: 0 auto; padding: 32px 20px 60px; }
+.legal-page h1 { font-family: var(--serif); font-size: 22px; font-weight: 400; margin-bottom: 6px; }
+.legal-page .legal-date { font-size: 12px; color: var(--text3); margin-bottom: 28px; }
+.legal-page h2 { font-size: 15px; font-weight: 600; margin: 24px 0 8px; }
+.legal-page p, .legal-page li { font-size: 13px; color: var(--text2); line-height: 1.85; }
+.legal-page ul { padding-left: 18px; }
+.legal-page a { color: var(--accent); }
+
+/* ── 헬스체크 숨김 ── */
+.health-hidden { display: none; }
+
+/* ── 계정 삭제 확인 모달 ── */
+.danger-zone { margin-top: 24px; padding: 14px; border: 1px solid var(--red); border-radius: var(--radius); }
+.danger-zone-title { font-size: 12px; font-weight: 600; color: var(--red); margin-bottom: 10px; letter-spacing: .06em; text-transform: uppercase; }
+
 </style>
 </head>
 <body>
@@ -1218,6 +1265,13 @@ input, textarea { font-family: var(--sans); color: var(--text); }
   <button class="mitem" onclick="closeUserMenu();openAccountModal()"><i class="ti ti-users"></i> 계정 전환</button>
   <div style="height:1px;background:var(--border);margin:4px 0"></div>
   <button class="mitem" onclick="doLogout()" style="color:var(--red)"><i class="ti ti-logout"></i> 로그아웃</button>
+  <div style="height:1px;background:var(--border);margin:4px 0"></div>
+  <button class="mitem" onclick="openDeleteAccountModal()" style="color:var(--red);font-size:12px"><i class="ti ti-user-x"></i> 계정 탈퇴</button>
+  <div style="padding:8px 12px;display:flex;gap:8px">
+    <button onclick="openPrivacyPage()" style="font-size:10px;color:var(--text3);background:none;cursor:pointer;font-family:var(--sans)">개인정보처리방침</button>
+    <span style="font-size:10px;color:var(--border2)">·</span>
+    <button onclick="openTermsPage()" style="font-size:10px;color:var(--text3);background:none;cursor:pointer;font-family:var(--sans)">이용약관</button>
+  </div>
 </div>
 
 <!-- 새 세계관 모달 -->
@@ -1923,6 +1977,7 @@ async function selectWorld(world) {
   renderWorldBanner();
   applyWorldTheme(world);
   await loadWorldData();
+  await loadWorldAdmins();
   navTo('home');
 }
 
@@ -2178,9 +2233,20 @@ function avEl(char, size = 48) {
 }
 
 function renderPost(p, isReply = false) {
-  const body = p.content.length > 400
+  const isSensitive = p.is_sensitive && !p._revealed;
+  const bodyInner = p.content.length > 400
     ? `<span class="post-preview">${formatContent(p.content.slice(0, 400))}</span><span class="post-full">${formatContent(p.content.slice(400))}</span><span class="post-more-btn" onclick="expandPost(event,'${p.id}')">더 보기</span>`
     : formatContent(p.content);
+  const body = isSensitive
+    ? `<div class="post-blur-wrap" id="blur-${p.id}">
+        <div class="post-blur-content">${bodyInner}</div>
+        <div class="post-blur-overlay" onclick="revealPost(event,'${p.id}')">
+          <i class="ti ti-eye-off" style="font-size:18px;color:var(--text3)"></i>
+          <span class="blur-label">민감한 콘텐츠 — 클릭해서 보기</span>
+        </div>
+       </div>`
+    : bodyInner;
+  const sensitiveBadge = p.is_sensitive ? '<span class="sensitive-badge">민감</span>' : '';
   const media = p.media || [];
   const mediaHtml = media.length > 0 ? `
     <div class="media-grid count-${Math.min(media.length, 4)}" style="padding-left:${isReply?'72px':'58px'}">
@@ -2213,7 +2279,8 @@ function renderPost(p, isReply = false) {
         <button class="pact bm-btn ${bookmarks.has(p.id)?'bookmarked':''}" id="bm-${p.id}" onclick="toggleBookmark(event,'${p.id}')"><i class="${bookmarks.has(p.id)?'ti ti-bookmark-filled':'ti ti-bookmark'}"></i></button>
       ${p.user_id === appUser?.id ? `<button class="pact" title="수정" data-pid="${p.id}" onclick="event.stopPropagation();openEditPostById(this)"><i class="ti ti-edit" style="font-size:13px"></i></button>` : ''}
       ${p.user_id === appUser?.id && !isReply ? `<button class="pact ${p.is_pinned?'liked':''}" title="${p.is_pinned?'고정 해제':'고정'}" onclick="event.stopPropagation();togglePinPost('${p.id}')"><i class="ti ti-pin" style="font-size:13px"></i></button>` : ''}
-      ${p.user_id === appUser?.id ? `<button class="pact" onclick="deletePost(event,'${p.id}')"><i class="ti ti-trash" style="font-size:13px"></i></button>` : ''}
+      ${(p.user_id === appUser?.id || isWorldAdmin()) ? `<button class="pact" onclick="deletePost(event,'${p.id}')" title="삭제"><i class="ti ti-trash" style="font-size:13px"></i></button>` : ''}
+      ${(isWorldAdmin() && p.user_id !== appUser?.id) ? `<button class="pact" onclick="toggleForceSensitive(event,'${p.id}')" title="블러 강제 적용"><i class="ti ti-eye-off" style="font-size:13px"></i></button>` : ''}
       </div>
       <div class="replies-container" id="replies-${p.id}"></div>
     </div>`;
@@ -2363,11 +2430,13 @@ async function submitPost() {
   const btn = document.querySelector('.compose-footer .btn-primary');
   await withLoading(btn, async () => {
     const res = await api('POST', `/api/worlds/${encodeURIComponent(currentWorld.slug)}/posts`, {
-      content, character_id: selectedCharId, media_urls: pendingMediaUrls
+      content, character_id: selectedCharId, media_urls: pendingMediaUrls, is_sensitive: document.getElementById('compose-sensitive-chk')?.checked || false
     });
     if (res.error) { toast(res.error); return; }
     ta.value = ''; ta.style.height = 'auto';
     pendingMediaUrls = [];
+    const sensitiveChk = document.getElementById('compose-sensitive-chk');
+    if (sensitiveChk) sensitiveChk.checked = false;
     document.getElementById('media-preview-area').innerHTML = '';
     feedPosts.unshift(res.post);
     renderFeed();
@@ -3157,6 +3226,11 @@ function renderCustPanel() {
     </div>
 
     <div style="margin-bottom:8px">
+      <div style="font-size:11px;font-weight:600;color:var(--text3);letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px">세계관 관리자</div>
+      <div id="world-admin-list" style="margin-bottom:8px;font-size:12px;color:var(--text2)">로딩 중...</div>
+      <button onclick="openWorldAdminModal()" style="width:100%;padding:7px;border-radius:var(--radius-sm);border:1px solid var(--border2);color:var(--text2);background:none;font-family:var(--sans);font-size:12px;cursor:pointer;margin-bottom:14px">
+        <i class="ti ti-shield-plus"></i> 관리자 지정/해제
+      </button>
       <div style="font-size:11px;font-weight:600;color:var(--text3);letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px">위험 구역</div>
       <button onclick="deleteWorld()" style="width:100%;padding:8px;border-radius:var(--radius-sm);border:1px solid var(--red);color:var(--red);background:none;font-family:var(--sans);font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px">
         <i class="ti ti-trash"></i> 세계관 삭제
@@ -4793,6 +4867,115 @@ async function deleteChar(charId) {
   } else toast(r.error || '삭제 실패');
 }
 
+
+// ─── 관리자 권한 체크 ───
+function isWorldAdmin() {
+  if (!currentWorld || !appUser) return false;
+  // 시스템 admin이거나 세계관 개설자이거나 세계관 관리자
+  if (appUser.role === 'admin') return true;
+  if (currentWorld.owner_id === appUser.id) return true;
+  if (currentWorldAdmins?.includes(appUser.id)) return true;
+  return false;
+}
+function isSiteAdmin() {
+  return appUser?.role === 'admin';
+}
+
+let currentWorldAdmins = []; // 세계관 관리자 user_id 배열
+
+async function loadWorldAdmins() {
+  if (!currentWorld) return;
+  const r = await api('GET', `/api/worlds/${encodeURIComponent(currentWorld.slug)}/admins`);
+  currentWorldAdmins = r.admins?.map(a => a.user_id) || [];
+}
+
+async function setWorldAdmin(userId, isAdmin) {
+  const r = await api('POST', `/api/worlds/${encodeURIComponent(currentWorld.slug)}/admins`, { user_id: userId, is_admin: isAdmin });
+  if (r.ok) { await loadWorldAdmins(); toast(isAdmin ? '관리자로 지정됐습니다' : '관리자가 해제됐습니다'); }
+  else toast(r.error || '오류가 발생했습니다');
+}
+
+// ─── 블러 ───
+function revealPost(e, postId) {
+  e.stopPropagation();
+  const wrap = document.getElementById('blur-' + postId);
+  if (wrap) wrap.classList.add('revealed');
+  // feedPosts 배열에도 반영
+  const p = feedPosts.find(p => p.id === postId);
+  if (p) p._revealed = true;
+}
+
+async function toggleForceSensitive(e, postId) {
+  e.stopPropagation();
+  const r = await api('PATCH', `/api/posts/${postId}`, { force_sensitive: true });
+  if (r.ok) {
+    const p = feedPosts.find(p => p.id === postId);
+    if (p) { p.is_sensitive = true; p._revealed = false; renderFeed(false); }
+    toast('블러가 적용됐습니다');
+  }
+}
+
+// ─── 계정 탈퇴 ───
+function openDeleteAccountModal() {
+  const modal = document.getElementById('delete-account-modal');
+  if (modal) { document.getElementById('delete-account-confirm').value = ''; modal.classList.add('open'); }
+}
+
+async function submitDeleteAccount() {
+  const confirm = document.getElementById('delete-account-confirm')?.value;
+  if (confirm !== '탈퇴') { toast('탈퇴를 입력해주세요'); return; }
+  if (!window.confirm('정말로 탈퇴하시겠어요? 모든 캐릭터와 게시글이 삭제됩니다.')) return;
+  const r = await api('DELETE', '/api/auth/account');
+  if (r.ok) { toast('탈퇴됐습니다'); setTimeout(() => location.reload(), 1000); }
+  else toast(r.error || '오류가 발생했습니다');
+}
+
+// ─── 법적 페이지 ───
+function openPrivacyPage() {
+  const el = document.getElementById('privacy-modal');
+  if (el) el.classList.add('open');
+}
+function openTermsPage() {
+  const el = document.getElementById('terms-modal');
+  if (el) el.classList.add('open');
+}
+
+// ─── DM 읽음 표시 ───
+async function markRoomRead(roomId) {
+  await api('POST', `/api/dm/rooms/${roomId}/read`);
+  // 읽음 처리 후 목록 갱신
+  const unreadEl = document.getElementById(`room-unread-${roomId}`);
+  if (unreadEl) unreadEl.style.display = 'none';
+  loadDmRooms();
+}
+
+// ─── loadWorldData에 관리자 로드 추가 ───
+const _origLoadWorldData = typeof loadWorldData === 'function' ? loadWorldData : null;
+
+
+async function openWorldAdminModal() {
+  const el = document.getElementById('world-admin-member-list');
+  if (!el) return;
+  el.innerHTML = '<div class="loading-center"><div class="spinner"></div></div>';
+  openModal('world-admin-modal');
+  const [membersRes] = await Promise.all([
+    api('GET', `/api/worlds/${encodeURIComponent(currentWorld.slug)}`)
+  ]);
+  const members = membersRes.members || [];
+  await loadWorldAdmins();
+  el.innerHTML = members
+    .filter(m => m.id !== currentWorld.owner_id)
+    .map(m => {
+      const isAdmin = currentWorldAdmins.includes(m.id);
+      return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
+        <div style="flex:1;font-size:13px">${m.display_name}${isAdmin ? '<span class="world-admin-tag" style="margin-left:6px">관리자</span>' : ''}</div>
+        <button onclick="setWorldAdmin('${m.id}', ${!isAdmin})" class="btn btn-ghost" style="font-size:12px;padding:4px 10px">
+          ${isAdmin ? '관리자 해제' : '관리자 지정'}
+        </button>
+      </div>`;
+    }).join('') || '<p style="font-size:13px;color:var(--text3)">다른 멤버가 없습니다.</p>';
+}
+
 // ─── Boot ───
 initApp();
 
@@ -4915,6 +5098,111 @@ initApp();
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal('invite-modal')">취소</button>
       <button class="btn btn-primary" onclick="useInviteCode(document.getElementById('invite-code-input').value.trim())"><i class="ti ti-door-enter"></i> 참여하기</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- 계정 탈퇴 모달 -->
+<div class="modal-bg" id="delete-account-modal">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-head">
+      <span class="modal-title" style="color:var(--red)">계정 탈퇴</span>
+      <button class="modal-close" onclick="closeModal('delete-account-modal')"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="modal-body">
+      <div style="background:#fff0f0;border:1px solid #fcc;border-radius:var(--radius-sm);padding:12px 14px;margin-bottom:16px;font-size:13px;color:var(--red)">
+        <b>주의:</b> 탈퇴하면 모든 캐릭터, 게시글, 대화 내역이 영구 삭제되며 복구할 수 없습니다.
+      </div>
+      <div class="field">
+        <label>확인을 위해 <b>탈퇴</b>를 입력해주세요</label>
+        <input class="finput" id="delete-account-confirm" type="text" placeholder="탈퇴">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('delete-account-modal')">취소</button>
+      <button class="btn" style="background:var(--red);color:#fff" onclick="submitDeleteAccount()">탈퇴하기</button>
+    </div>
+  </div>
+</div>
+
+<!-- 관리자 지정 모달 -->
+<div class="modal-bg" id="world-admin-modal">
+  <div class="modal" style="max-width:460px">
+    <div class="modal-head">
+      <span class="modal-title">세계관 관리자 지정</span>
+      <button class="modal-close" onclick="closeModal('world-admin-modal')"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="modal-body">
+      <div style="font-size:12px;color:var(--text3);margin-bottom:12px">관리자는 모든 게시글 삭제 및 블러 적용 권한을 가집니다.</div>
+      <div id="world-admin-member-list" style="display:flex;flex-direction:column;gap:8px"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('world-admin-modal')">닫기</button>
+    </div>
+  </div>
+</div>
+
+<!-- 개인정보처리방침 모달 -->
+<div class="modal-bg" id="privacy-modal">
+  <div class="modal" style="max-width:660px;max-height:85vh">
+    <div class="modal-head">
+      <span class="modal-title">개인정보처리방침</span>
+      <button class="modal-close" onclick="closeModal('privacy-modal')"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="modal-body" style="overflow-y:auto;max-height:65vh">
+      <div class="legal-page" style="padding:0">
+        <p class="legal-date">최종 수정일: 2026년 5월 28일</p>
+        <p>Lorethread(이하 "서비스")는 이용자의 개인정보를 중요시하며, 개인정보보호법 등 관련 법령을 준수합니다.</p>
+        <h2>1. 수집하는 개인정보 항목</h2>
+        <ul><li>이메일 주소, 표시 이름 (회원가입 시)</li><li>서비스 이용 기록, 접속 로그</li></ul>
+        <h2>2. 개인정보 수집 목적</h2>
+        <ul><li>회원 식별 및 서비스 제공</li><li>불량 이용자 제재 및 분쟁 처리</li></ul>
+        <h2>3. 개인정보 보유 기간</h2>
+        <p>회원 탈퇴 시 즉시 삭제합니다. 단, 관련 법령에 따라 보존이 필요한 경우 해당 기간 동안 보관합니다.</p>
+        <h2>4. 개인정보 제3자 제공</h2>
+        <p>이용자의 동의 없이 제3자에게 개인정보를 제공하지 않습니다.</p>
+        <h2>5. 이용자의 권리</h2>
+        <p>이용자는 언제든지 개인정보 조회, 수정, 삭제(탈퇴)를 요청할 수 있습니다. 계정 메뉴 → 계정 탈퇴를 통해 즉시 삭제할 수 있습니다.</p>
+        <h2>6. 문의</h2>
+        <p>개인정보 관련 문의는 서비스 운영자에게 연락해주세요.</p>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('privacy-modal')">닫기</button>
+    </div>
+  </div>
+</div>
+
+<!-- 이용약관 모달 -->
+<div class="modal-bg" id="terms-modal">
+  <div class="modal" style="max-width:660px;max-height:85vh">
+    <div class="modal-head">
+      <span class="modal-title">이용약관</span>
+      <button class="modal-close" onclick="closeModal('terms-modal')"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="modal-body" style="overflow-y:auto;max-height:65vh">
+      <div class="legal-page" style="padding:0">
+        <p class="legal-date">최종 수정일: 2026년 5월 28일</p>
+        <h2>제1조 (목적)</h2>
+        <p>본 약관은 Lorethread 서비스 이용에 관한 조건 및 절차를 규정합니다.</p>
+        <h2>제2조 (서비스 이용)</h2>
+        <ul>
+          <li>만 14세 이상만 가입할 수 있습니다.</li>
+          <li>타인의 권리를 침해하거나 불법적인 콘텐츠를 게시할 수 없습니다.</li>
+          <li>타인에 대한 비방, 혐오 표현을 금지합니다.</li>
+          <li>타인의 동의 없이 개인정보를 게시할 수 없습니다.</li>
+        </ul>
+        <h2>제3조 (콘텐츠)</h2>
+        <p>이용자가 게시한 콘텐츠의 저작권은 이용자에게 있습니다. 서비스 운영자는 서비스 제공 목적 내에서 콘텐츠를 사용할 수 있습니다.</p>
+        <h2>제4조 (서비스 중단)</h2>
+        <p>운영자는 시스템 점검, 장애 등의 사유로 서비스를 일시 중단할 수 있습니다.</p>
+        <h2>제5조 (제재)</h2>
+        <p>약관 위반 시 운영자는 사전 통보 없이 계정을 정지하거나 콘텐츠를 삭제할 수 있습니다.</p>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('terms-modal')">닫기</button>
     </div>
   </div>
 </div>

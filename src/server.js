@@ -18,6 +18,7 @@ import {
   addPostMedia, getReaction, addReaction, removeReaction, getReactionCount,
   createNotif, getNotifs, getUnreadCount, markAllRead,
   getAnnouncements, createAnnouncement, deleteAnnouncement,
+  getWorldAdmins, setWorldAdmin, deleteUserAccount,
   getFollowerCount, getFollowingCount,
   createRoom, getRoomsByUser, getRoomById, addRoomMember, getRoomMembers,
   isRoomMember, createDmMessage, getDmMessages, getUnreadDmCount, markDmRead, findDmRoom
@@ -114,7 +115,7 @@ async function getSessionUser(req) {
     if (!sid) return null;
     const sess = await getSession(sid);
     if (!sess) return null;
-    return await getUser(sess.user_id);
+    return getUser(sess.user_id);
   } catch { return null; }
 }
 
@@ -164,6 +165,8 @@ const server = http.createServer(async (req, res) => {
 
     // ── Auth ──
     if (path === '/api/auth/register' && m === 'POST') {
+      const ip = req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress || 'unknown';
+      if (rateLimit(ip, 'register', 5, 3600000)) return json(res, { error: '가입 요청이 너무 많습니다. 1시간 후 다시 시도해주세요.' }, 429);
       const b = await readBody(req);
       if (!b.email || !b.password || !b.display_name) return json(res, { error: '모든 항목을 입력해주세요.' }, 400);
       if (await getUserByEmail(b.email)) return json(res, { error: '이미 사용 중인 이메일입니다.' }, 400);
@@ -180,6 +183,8 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (path === '/api/auth/login' && m === 'POST') {
+      const ip = req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress || 'unknown';
+      if (rateLimit(ip, 'login', 10, 60000)) return json(res, { error: '잠시 후 다시 시도해주세요.' }, 429);
       const b = await readBody(req);
       const u = await getUserByEmail(b.email);
       if (!u || !(await bcrypt.compare(b.password, u.password_hash))) return json(res, { error: '이메일 또는 비밀번호가 올바르지 않습니다.' }, 401);
@@ -245,7 +250,7 @@ const server = http.createServer(async (req, res) => {
       const pool = getDb();
       const sessions = await pool.query('SELECT DISTINCT user_id FROM sessions').then(r => r.rows);
       const seen = new Set();
-      const accounts = (await Promise.all(sessions.map(s => await getUser(s.user_id)))).filter(u => {
+      const accounts = (await Promise.all(sessions.map(s => getUser(s.user_id)))).filter(u => {
         if (!u || seen.has(u.id)) return false;
         seen.add(u.id); return true;
       }).map(u => ({ user_id: u.id, display_name: u.display_name, email: u.email, role: u.role }));
@@ -355,7 +360,21 @@ const server = http.createServer(async (req, res) => {
         return json(res, { ok: true, code });
       }
 
-      if (sub === 'announcements') {
+  
+    if (sub === 'admins') {
+      if (m === 'GET') {
+        if (!world) return json(res, { error: 'Not found' }, 404);
+        return json(res, { admins: await getWorldAdmins(world.id) });
+      }
+      if (m === 'POST') {
+        if (!world || world.owner_id !== user?.id) return json(res, { error: 'Forbidden' }, 403);
+        const b = await readBody(req);
+        await setWorldAdmin(world.id, b.user_id, b.is_admin);
+        return json(res, { ok: true });
+      }
+    }
+
+    if (sub === 'announcements') {
         if (!world) return json(res, { error: 'Not found' }, 404);
         if (m === 'GET') return json(res, { announcements: await getAnnouncements(world.id) });
         if (m === 'POST') {
@@ -529,9 +548,24 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (!sub && m === 'PATCH') {
+        // 관리자 강제 블러
+        if (b?.force_sensitive) {
+          const postChar = await getCharById(post.character_id);
+          const worldForPost = await getWorldById(post.world_id);
+          const isAdmin = user?.role === 'admin' || worldForPost?.owner_id === user?.id;
+          const admins = await getWorldAdmins(post.world_id);
+          const isWorldAdm = admins.some(a => a.user_id === user?.id);
+          if (!isAdmin && !isWorldAdm) return json(res, { error: 'Forbidden' }, 403);
+          await pool.query('UPDATE posts SET is_sensitive = 1 WHERE id = $1', [postId]);
+          return json(res, { ok: true });
+        }
         if (!user) return json(res, { error: 'Unauthorized' }, 401);
         const c = await getCharById(charId);
-        if (!c || c.user_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
+        const isAdminDel = user.role === 'admin';
+        const delWorld = await getWorldById(post.world_id);
+        const delWorldAdmins = await getWorldAdmins(post.world_id);
+        const isWorldAdminDel = delWorld?.owner_id === user.id || delWorldAdmins.some(a => a.user_id === user.id);
+        if (!isAdminDel && !isWorldAdminDel && (!c || c.user_id !== user.id)) return json(res, { error: 'Forbidden' }, 403);
         const b = await readBody(req);
         await updateChar(charId, b);
         if (b.sections) await setCharSections(charId, b.sections);
@@ -588,6 +622,17 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (!sub && m === 'PATCH') {
+        // 관리자 강제 블러
+        if (b?.force_sensitive) {
+          const postChar = await getCharById(post.character_id);
+          const worldForPost = await getWorldById(post.world_id);
+          const isAdmin = user?.role === 'admin' || worldForPost?.owner_id === user?.id;
+          const admins = await getWorldAdmins(post.world_id);
+          const isWorldAdm = admins.some(a => a.user_id === user?.id);
+          if (!isAdmin && !isWorldAdm) return json(res, { error: 'Forbidden' }, 403);
+          await pool.query('UPDATE posts SET is_sensitive = 1 WHERE id = $1', [postId]);
+          return json(res, { ok: true });
+        }
         if (!user) return json(res, { error: 'Unauthorized' }, 401);
         const post = await getPostById(postId);
         if (!post) return json(res, { error: 'Not found' }, 404);
@@ -679,6 +724,34 @@ const server = http.createServer(async (req, res) => {
       return json(res, { count: await getUnreadDmCount(user.id) });
     }
 
+
+    // ── 헬스체크 ──
+    if (path === '/health' || path === '/ping') {
+      return json(res, { status: 'ok', timestamp: new Date().toISOString() });
+    }
+
+    // ── 계정 탈퇴 ──
+    if (path === '/api/auth/account' && m === 'DELETE') {
+      if (!user) return json(res, { error: 'Unauthorized' }, 401);
+      await deleteUserAccount(user.id);
+      const sid = parseCookie(req.headers.cookie || '').session;
+      if (sid) await deleteSession(sid);
+      res.setHeader('Set-Cookie', 'session=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax');
+      return json(res, { ok: true });
+    }
+
+    // ── DM 읽음 처리 ──
+    if (path.startsWith('/api/dm/rooms/') && m === 'POST') {
+      const parts = path.slice('/api/dm/rooms/'.length).split('/');
+      const roomId = parts[0];
+      const sub = parts[1] || '';
+      if (sub === 'read') {
+        if (!user) return json(res, { error: 'Unauthorized' }, 401);
+        await markDmRead(user.id, roomId);
+        return json(res, { ok: true });
+      }
+    }
+
     serveFile(res, join(__dirname, '../public/index.html'));
   } catch (err) {
     console.error('[서버 오류]', err);
@@ -688,6 +761,24 @@ const server = http.createServer(async (req, res) => {
 
 process.on('uncaughtException', err => console.error('[uncaughtException]', err));
 process.on('unhandledRejection', reason => console.error('[unhandledRejection]', reason));
+
+
+// ── Rate Limiting ──
+const rateLimitMap = new Map();
+function rateLimit(ip, action, maxReq = 10, windowMs = 60000) {
+  const key = `${ip}:${action}`;
+  const now = Date.now();
+  const record = rateLimitMap.get(key) || { count: 0, resetAt: now + windowMs };
+  if (now > record.resetAt) { record.count = 0; record.resetAt = now + windowMs; }
+  record.count++;
+  rateLimitMap.set(key, record);
+  return record.count > maxReq;
+}
+// 1시간마다 캐시 정리
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of rateLimitMap) if (now > v.resetAt) rateLimitMap.delete(k);
+}, 3600000);
 
 // DB 초기화 후 서버 시작
 initDb().then(() => {
