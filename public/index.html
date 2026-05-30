@@ -4975,17 +4975,21 @@ async function openWorldAdminModal() {
   if (!el) return;
   el.innerHTML = '<div class="loading-center"><div class="spinner"></div></div>';
   openModal('world-admin-modal');
-  const [membersRes] = await Promise.all([
-    api('GET', `/api/worlds/${encodeURIComponent(currentWorld.slug)}`)
-  ]);
+  const membersRes = await api('GET', `/api/worlds/${encodeURIComponent(currentWorld.slug)}`);
   const members = membersRes.members || [];
   await loadWorldAdmins();
+  const charsByUser = {};
+  (currentWorldChars || []).forEach(c => {
+    if (!charsByUser[c.user_id]) charsByUser[c.user_id] = [];
+    charsByUser[c.user_id].push(c.name);
+  });
   el.innerHTML = members
     .filter(m => m.id !== currentWorld.owner_id)
     .map(m => {
       const isAdmin = currentWorldAdmins.includes(m.id);
+      const charNames = charsByUser[m.id]?.join(', ') || '(캐릭터 없음)';
       return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
-        <div style="flex:1;font-size:13px">${m.display_name}${isAdmin ? '<span class="world-admin-tag" style="margin-left:6px">관리자</span>' : ''}</div>
+        <div style="flex:1;font-size:13px">${escapeHtml(charNames)}${isAdmin ? ' <span class="world-admin-tag">관리자</span>' : ''}</div>
         <button onclick="setWorldAdmin('${m.id}', ${!isAdmin})" class="btn btn-ghost" style="font-size:12px;padding:4px 10px">
           ${isAdmin ? '관리자 해제' : '관리자 지정'}
         </button>
