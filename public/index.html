@@ -1847,6 +1847,7 @@ async function initApp() {
   startSSE();
   if (appWorlds.length > 0) selectWorld(appWorlds[0]);
   else showHomeView();
+  checkPostLink();
 }
 
 function showPage(id) {
@@ -2070,7 +2071,7 @@ function renderComposeChar() {
   const dd = document.getElementById('char-dropdown');
   dd.innerHTML = myChars.map(c => `
     <div class="char-option" onclick="selectComposeChar('${c.id}')">
-      <div class="char-option-av" style="background:${c.color_bg};color:${c.color_fg}">${c.avatar_url ? `<img src="${c.avatar_url}" alt="">` : c.name[0]}</div>
+      <div class="char-option-av" style="background:${c.color_bg};color:${c.color_fg}">${c.avatar_url ? `<img src="${c.avatar_url}" loading="lazy" alt="">` : c.name[0]}</div>
       <div><div class="char-option-name">${escapeHtml(c.name)}</div><div class="char-option-role">${c.role || ''}</div></div>
     </div>`).join('');
 }
@@ -2091,7 +2092,7 @@ function renderSideMyChars() {
   const el = document.getElementById('rside-online-list');
   el.innerHTML = myChars.map(c => `
     <div class="side-chr" onclick="openCharProfile('${c.id}')">
-      <div class="side-chr-av" style="background:${c.color_bg};color:${c.color_fg}">${c.avatar_url ? `<img src="${c.avatar_url}" alt="">` : c.name[0]}</div>
+      <div class="side-chr-av" style="background:${c.color_bg};color:${c.color_fg}">${c.avatar_url ? `<img src="${c.avatar_url}" loading="lazy" alt="">` : c.name[0]}</div>
       <div><div class="side-chr-name">${escapeHtml(c.name)}</div><div class="side-chr-role">${c.role || ''}</div></div>
       <div class="side-odot"></div>
     </div>`).join('');
@@ -2252,7 +2253,7 @@ function renderPost(p, isReply = false) {
     <div class="media-grid count-${Math.min(media.length, 4)}" style="padding-left:${isReply?'72px':'58px'}">
       ${media.slice(0,4).map(m => m.media_type === 'video'
         ? `<div class="media-item"><video controls onclick="event.stopPropagation()"><source src="${m.url}"></video></div>`
-        : `<div class="media-item" data-allurls="${media.filter(x=>x.media_type!=='video').map(x=>x.url).join('|')}"><img src="${m.url}" alt="" onclick="lbOpenFromEl(event,this.parentElement,'${m.url}')"></div>`
+        : `<div class="media-item" data-allurls="${media.filter(x=>x.media_type!=='video').map(x=>x.url).join('|')}"><img src="${m.url}" loading="lazy" alt="" onclick="lbOpenFromEl(event,this.parentElement,'${m.url}')"></div>`
       ).join('')}
     </div>` : '';
   const replyClass = isReply ? 'reply-post' : '';
@@ -2736,7 +2737,7 @@ function renderCharsGrid() {
   grid.innerHTML = shown.map(c => `
     <div class="char-card" onclick="openCharProfile('${c.id}')">
       <div class="char-card-top" style="background:${c.color_bg}20">
-        <div class="char-card-av" style="background:${c.color_bg};color:${c.color_fg}">${c.avatar_url?`<img src="${c.avatar_url}" alt="">`:c.name[0]}</div>
+        <div class="char-card-av" style="background:${c.color_bg};color:${c.color_fg}">${c.avatar_url?`<img src="${c.avatar_url}" loading="lazy" alt="">`:c.name[0]}</div>
         <div class="online-dot online"></div>
       </div>
       <div class="char-card-body">
@@ -2789,7 +2790,7 @@ function renderCharProfile(c, posts, followers, following) {
       </div>
       <div class="char-profile-av-wrap">
         <div class="char-profile-av" style="background:${c.color_bg};color:${c.color_fg}">
-          ${c.avatar_url ? `<img src="${c.avatar_url}" alt="">` : c.name[0]}
+          ${c.avatar_url ? `<img src="${c.avatar_url}" loading="lazy" alt="">` : c.name[0]}
         </div>
       </div>
     </div>
@@ -2825,7 +2826,7 @@ function renderCharProfile(c, posts, followers, following) {
         ? `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:2px;padding:2px">` +
           mediaPosts.flatMap(p => (p.media||[]).filter(m=>m.media_type!=='video').map(m =>
             `<div style="aspect-ratio:1;overflow:hidden;cursor:pointer;background:var(--bg3)" onclick="lbOpenFromEl(event,this,'${m.url}')" data-allurls="${mediaPosts.flatMap(pp=>(pp.media||[]).filter(mm=>mm.media_type!=='video').map(mm=>mm.url)).join('|')}">
-               <img src="${m.url}" style="width:100%;height:100%;object-fit:cover" alt="">
+               <img src="${m.url}" loading="lazy" style="width:100%;height:100%;object-fit:cover" alt="">
              </div>`
           )).join('') + '</div>'
         : '<div class="empty-state"><i class="ti ti-photo"></i><p>미디어가 없습니다.</p></div>'}
@@ -3787,7 +3788,7 @@ function showMentionDropdown(ta, chars, trigger) {
   dd.innerHTML = chars.map(c => `
     <div class="mention-item" onclick="insertMention('${c.handle}','${trigger}')">
       <div style="width:24px;height:24px;border-radius:50%;background:${c.color_bg};color:${c.color_fg};display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;flex-shrink:0;overflow:hidden">
-        ${c.avatar_url ? `<img src="${c.avatar_url}" style="width:100%;height:100%;object-fit:cover" alt="">` : c.name[0]}
+        ${c.avatar_url ? `<img src="${c.avatar_url}" loading="lazy" style="width:100%;height:100%;object-fit:cover" alt="">` : c.name[0]}
       </div>
       <div>
         <div style="font-size:12px;font-weight:500">${escapeHtml(c.name)}</div>
@@ -4508,7 +4509,7 @@ function renderCharsStandalone(q = '') {
   grid.innerHTML = shown.map(c => `
     <div class="char-card" onclick="openCharDetail('${c.id}')">
       <div class="char-card-top" style="background:${c.color_bg}22">
-        <div class="char-card-av" style="background:${c.color_bg};color:${c.color_fg}">${c.avatar_url?`<img src="${c.avatar_url}" alt="">`:c.name[0]}</div>
+        <div class="char-card-av" style="background:${c.color_bg};color:${c.color_fg}">${c.avatar_url?`<img src="${c.avatar_url}" loading="lazy" alt="">`:c.name[0]}</div>
       </div>
       <div class="char-card-body">
         <div class="char-card-name">${escapeHtml(c.name)}</div>
@@ -4555,7 +4556,7 @@ async function openCharDetail(charId) {
       </div>
       <!-- 프로필 아바타 -->
       <div style="position:absolute;bottom:-30px;left:16px;width:60px;height:60px;border-radius:50%;background:${c.color_bg};color:${c.color_fg};border:3px solid var(--bg2);display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:600;overflow:hidden">
-        ${c.avatar_url ? `<img src="${c.avatar_url}" style="width:100%;height:100%;object-fit:cover" alt="">` : c.name[0]}
+        ${c.avatar_url ? `<img src="${c.avatar_url}" loading="lazy" style="width:100%;height:100%;object-fit:cover" alt="">` : c.name[0]}
       </div>
     </div>
 
@@ -4995,6 +4996,42 @@ async function openWorldAdminModal() {
         </button>
       </div>`;
     }).join('') || '<p style="font-size:13px;color:var(--text3)">다른 멤버가 없습니다.</p>';
+}
+
+
+// ─── 포스트 링크 복사 ───
+function copyPostLink(e, postId) {
+  e.stopPropagation();
+  const url = `${window.location.origin}/?post=${postId}`;
+  navigator.clipboard.writeText(url).then(() => {
+    toast('링크가 복사됐습니다!');
+  }).catch(() => {
+    // 구형 브라우저 fallback
+    const ta = document.createElement('textarea');
+    ta.value = url;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    toast('링크가 복사됐습니다!');
+  });
+}
+
+// ─── 포스트 링크로 직접 접근 처리 ───
+function checkPostLink() {
+  const params = new URLSearchParams(window.location.search);
+  const postId = params.get('post');
+  if (postId && appUser) {
+    // 해당 포스트로 스크롤 또는 강조
+    setTimeout(() => {
+      const el = document.querySelector(`[data-post-id="${postId}"]`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.style.outline = '2px solid var(--accent)';
+        setTimeout(() => el.style.outline = '', 2000);
+      }
+    }, 1000);
+  }
 }
 
 // ─── Boot ───
