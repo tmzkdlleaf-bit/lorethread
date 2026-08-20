@@ -2280,6 +2280,7 @@ function renderPost(p, isReply = false) {
         <button class="pact bm-btn ${bookmarks.has(p.id)?'bookmarked':''}" id="bm-${p.id}" onclick="toggleBookmark(event,'${p.id}')"><i class="${bookmarks.has(p.id)?'ti ti-bookmark-filled':'ti ti-bookmark'}"></i></button>
       ${p.user_id === appUser?.id ? `<button class="pact" title="수정" data-pid="${p.id}" onclick="event.stopPropagation();openEditPostById(this)"><i class="ti ti-edit" style="font-size:13px"></i></button>` : ''}
       ${p.user_id === appUser?.id && !isReply ? `<button class="pact ${p.is_pinned?'liked':''}" title="${p.is_pinned?'고정 해제':'고정'}" onclick="event.stopPropagation();togglePinPost('${p.id}')"><i class="ti ti-pin" style="font-size:13px"></i></button>` : ''}
+      ${isWorldAdmin() ? `<button class="pact" onclick="toggleForceSensitive(event,'${p.id}',${p.is_sensitive ? 'false' : 'true'})" title="${p.is_sensitive ? '민감 표시 해제' : '민감 표시(블러)'}"><i class="ti ti-${p.is_sensitive ? 'eye' : 'eye-off'}" style="font-size:13px"></i></button>` : ''}
       ${(p.user_id === appUser?.id || isWorldAdmin()) ? `<button class="pact" onclick="deletePost(event,'${p.id}')" title="삭제"><i class="ti ti-trash" style="font-size:13px"></i></button>` : ''}
       ${(isWorldAdmin() && p.user_id !== appUser?.id) ? `<button class="pact" onclick="toggleForceSensitive(event,'${p.id}')" title="블러 강제 적용"><i class="ti ti-eye-off" style="font-size:13px"></i></button>` : ''}
       </div>
@@ -3073,13 +3074,44 @@ async function createWorld() {
 function openCustPanel() {
   renderCustPanel();
   document.getElementById('cust-panel').classList.add('open');
+  loadInviteList();
 }
 async function generateInviteCode() {
-  const r = await api('POST', `/api/worlds/${encodeURIComponent(currentWorld.slug)}/invite`);
+  const days = parseInt(document.getElementById('cp-invite-days')?.value || '0', 10) || 0;
+  const uses = parseInt(document.getElementById('cp-invite-uses')?.value || '0', 10) || 0;
+  const r = await api('POST', `/api/worlds/${encodeURIComponent(currentWorld.slug)}/invite`,
+    { expires_in_days: days, max_uses: uses });
   if (r.ok) {
     document.getElementById('cp-invite-code').value = r.code;
     toast('초대 코드가 생성됐습니다');
+    loadInviteList();
   } else toast(r.error || '오류가 발생했습니다.');
+}
+
+async function loadInviteList() {
+  const box = document.getElementById('cp-invite-list');
+  if (!box || !currentWorld) return;
+  const r = await api('GET', `/api/worlds/${encodeURIComponent(currentWorld.slug)}/invite`);
+  if (!r.invites) { box.innerHTML = ''; return; }
+  if (!r.invites.length) { box.innerHTML = '<div style="font-size:11px;color:var(--text3)">발급된 코드가 없습니다.</div>'; return; }
+  box.innerHTML = r.invites.map(inv => {
+    const dead = inv.is_revoked || inv.is_expired || inv.is_exhausted;
+    const state = inv.is_revoked ? '중지됨' : inv.is_expired ? '만료됨' : inv.is_exhausted ? '소진됨' : '사용 가능';
+    const limit = inv.max_uses ? `${inv.used_count}/${inv.max_uses}회` : `${inv.used_count}회 사용`;
+    const exp = inv.expires_at ? new Date(inv.expires_at).toLocaleDateString('ko-KR') + '까지' : '무기한';
+    return `<div style="display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid var(--border);opacity:${dead ? '.45' : '1'}">
+      <code style="flex:1;font-size:11px;font-family:monospace">${escapeHtml(inv.code)}</code>
+      <span style="font-size:10px;color:var(--text3)">${escapeHtml(state)} · ${escapeHtml(limit)} · ${escapeHtml(exp)}</span>
+      ${dead ? '' : `<button class="btn btn-ghost" style="font-size:10px;padding:2px 6px" onclick="revokeInviteCode('${escapeHtml(inv.code)}')">중지</button>`}
+    </div>`;
+  }).join('');
+}
+
+async function revokeInviteCode(code) {
+  if (!confirm('이 코드를 중지하시겠습니까? 되돌릴 수 없습니다.')) return;
+  const r = await api('DELETE', `/api/worlds/${encodeURIComponent(currentWorld.slug)}/invite`, { code });
+  if (r.ok) { toast('코드를 중지했습니다'); loadInviteList(); }
+  else toast(r.error || '오류가 발생했습니다.');
 }
 
 function copyInviteCode() {
@@ -3235,12 +3267,28 @@ function renderCustPanel() {
 
     <div style="margin-bottom:16px">
       <div style="font-size:11px;font-weight:600;color:var(--text3);letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px">초대 링크</div>
-      <div style="font-size:12px;color:var(--text2);margin-bottom:8px">코드를 공유하면 누구나 이 세계관에 참여할 수 있습니다.</div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:8px">코드를 공유하면 이 세계관에 참여할 수 있습니다. 유출에 대비해 기한과 인원을 제한하세요.</div>
+      <div style="display:flex;gap:6px;margin-bottom:6px">
+        <select id="cp-invite-days" class="finput" style="flex:1;font-size:11px">
+          <option value="7">7일 후 만료</option>
+          <option value="1">1일 후 만료</option>
+          <option value="30">30일 후 만료</option>
+          <option value="0">무기한</option>
+        </select>
+        <select id="cp-invite-uses" class="finput" style="flex:1;font-size:11px">
+          <option value="1">1명만</option>
+          <option value="5">5명까지</option>
+          <option value="20">20명까지</option>
+          <option value="0">무제한</option>
+        </select>
+      </div>
       <div style="display:flex;gap:6px">
         <input id="cp-invite-code" class="finput" style="flex:1;font-size:12px;font-family:monospace" readonly placeholder="생성 버튼을 누르세요">
         <button class="btn btn-ghost" style="font-size:12px;flex-shrink:0" onclick="copyInviteCode()"><i class="ti ti-copy"></i></button>
       </div>
       <button class="btn btn-ghost" style="width:100%;margin-top:6px;font-size:12px" onclick="generateInviteCode()"><i class="ti ti-link"></i> 초대 코드 생성</button>
+      <div style="font-size:11px;font-weight:600;color:var(--text3);margin-top:10px;margin-bottom:4px">발급된 코드</div>
+      <div id="cp-invite-list" style="font-size:11px"></div>
     </div>
 
     <div style="margin-bottom:8px">
@@ -4923,14 +4971,15 @@ function revealPost(e, postId) {
   if (p) p._revealed = true;
 }
 
-async function toggleForceSensitive(e, postId) {
+async function toggleForceSensitive(e, postId, on = true) {
   e.stopPropagation();
-  const r = await api('PATCH', `/api/posts/${postId}`, { force_sensitive: true });
+  const r = await api('PATCH', `/api/posts/${postId}`, { force_sensitive: !!on });
   if (r.ok) {
     const p = feedPosts.find(p => p.id === postId);
-    if (p) { p.is_sensitive = true; p._revealed = false; renderFeed(false); }
-    toast('블러가 적용됐습니다');
-  }
+    if (p) { p.is_sensitive = on ? 1 : 0; p._revealed = false; }
+    renderFeed(false);
+    toast(on ? '민감 콘텐츠로 표시했습니다' : '민감 표시를 해제했습니다');
+  } else toast(r.error || '권한이 없습니다.');
 }
 
 // ─── 계정 탈퇴 ───

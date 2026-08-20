@@ -23,7 +23,8 @@ import {
   getFollowerCount, getFollowingCount,
   createRoom, getRoomsByUser, getRoomById, addRoomMember, getRoomMembers,
   isRoomMember, createDmMessage, getDmMessages, getUnreadDmCount, markDmRead, findDmRoom,
-  cleanupSessions, deleteWorldCascade, SESSION_TTL_DAYS
+  cleanupSessions, deleteWorldCascade, SESSION_TTL_DAYS,
+  getInvites, createInvite, revokeInvite, consumeInvite, setPostSensitive
 } from './db.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -51,6 +52,16 @@ const SESSION_MAX_AGE = SESSION_TTL_DAYS * 86400;
 
 /** 신뢰할 수 있는 클라이언트 IP. x-forwarded-for는 위조 가능하므로
  *  Railway 등 프록시 1홉 뒤라는 전제에서 '마지막' 값을 쓴다. */
+/** 세계관 모더레이터인지. owner + world_admins + 전역 admin. */
+async function isModerator(user, worldId) {
+  if (!user) return false;
+  if (user.role === 'admin') return true;
+  const w = await getWorldById(worldId);
+  if (w?.owner_id === user.id) return true;
+  const admins = await getWorldAdmins(worldId);
+  return admins.some(a => a.user_id === user.id);
+}
+
 function clientIp(req) {
   const xff = req.headers['x-forwarded-for'];
   if (xff) {
@@ -464,12 +475,24 @@ const server = http.createServer(async (req, res) => {
     // ── 초대 코드 ──
     if (path === '/api/invite/use' && m === 'POST') {
       if (!user) return json(res, { error: 'Unauthorized' }, 401);
+      if (rateLimit(clientIp(req), 'invite', 20, 3600000)) {
+        return json(res, { error: '초대 코드 시도가 너무 많습니다.' }, 429);
+      }
       const b = await readBody(req);
       if (!b.code) return json(res, { error: '코드를 입력해주세요.' }, 400);
-      const pool = getDb();
-      const invite = await pool.query('SELECT * FROM invites WHERE code=$1', [b.code]).then(r => r.rows[0]);
-      if (!invite) return json(res, { error: '유효하지 않은 초대 코드입니다.' }, 404);
-      const targetWorld = await getWorldById(invite.world_id);
+
+      // 만료·사용횟수·폐기를 원자적으로 검사하고 카운트를 올린다.
+      const r = await consumeInvite(String(b.code).trim());
+      if (!r.ok) {
+        const msg = {
+          not_found: '유효하지 않은 초대 코드입니다.',
+          expired:   '만료된 초대 코드입니다.',
+          exhausted: '사용 횟수를 모두 소진한 코드입니다.',
+          revoked:   '사용이 중지된 코드입니다.',
+        }[r.reason] || '사용할 수 없는 코드입니다.';
+        return json(res, { error: msg, reason: r.reason }, r.reason === 'not_found' ? 404 : 410);
+      }
+      const targetWorld = await getWorldById(r.invite.world_id);
       if (!targetWorld) return json(res, { error: '세계관을 찾을 수 없습니다.' }, 404);
       await addWorldMember(targetWorld.id, user.id);
       return json(res, { ok: true, world: targetWorld });
@@ -529,17 +552,36 @@ const server = http.createServer(async (req, res) => {
         return json(res, { ok: true });
       }
 
-      if (sub === 'invite' && m === 'POST') {
-        if (!user || world?.owner_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
-        const pool = getDb();
-        const existing = await pool.query('SELECT * FROM invites WHERE world_id=$1', [world.id]).then(r => r.rows[0]);
-        if (existing) return json(res, { ok: true, code: existing.code });
-        const code = nanoid(10);
-        await pool.query('INSERT INTO invites (code,world_id,created_by,created_at) VALUES ($1,$2,$3,$4)', [code, world.id, user.id, now()]);
-        return json(res, { ok: true, code });
+      if (sub === 'invite') {
+        if (!world) return json(res, { error: 'Not found' }, 404);
+        if (!(await isModerator(user, world.id))) return json(res, { error: 'Forbidden' }, 403);
+
+        // 목록 — 만료/소진 상태까지 함께
+        if (m === 'GET') return json(res, { invites: await getInvites(world.id) });
+
+        // 발급 — 예전에는 세계관당 영구 코드 1개뿐이라 유출되면 회수 불가였다
+        if (m === 'POST') {
+          const b = await readBody(req);
+          const days = clampInt(b.expires_in_days, 0, 0, 365);      // 0 = 무기한
+          const maxUses = clampInt(b.max_uses, 0, 0, 1000);          // 0 = 무제한
+          const code = nanoid(10);
+          const inv = await createInvite({
+            code, world_id: world.id, created_by: user.id, created_at: now(),
+            expires_at: days ? new Date(Date.now() + days * 86400000).toISOString() : null,
+            max_uses: maxUses || null,
+          });
+          return json(res, { ok: true, code, invite: inv });
+        }
+
+        // 폐기
+        if (m === 'DELETE') {
+          const b = await readBody(req);
+          if (!b.code) return json(res, { error: '코드를 지정해주세요.' }, 400);
+          const done = await revokeInvite(String(b.code).trim(), world.id);
+          return done ? json(res, { ok: true }) : json(res, { error: '코드를 찾을 수 없습니다.' }, 404);
+        }
       }
 
-  
     if (sub === 'admins') {
       if (m === 'GET') {
         if (!world) return json(res, { error: 'Not found' }, 404);
@@ -623,7 +665,8 @@ const server = http.createServer(async (req, res) => {
           if (!user) return json(res, { error: 'Unauthorized' }, 401);
           // 예전에는 슬러그만 알면 누구나 남의 세계관에 캐릭터를 만들 수 있었다.
           const members = await getWorldMembers(world.id);
-          const isMember = world.owner_id === user.id || members.some(mm => mm.user_id === user.id);
+          // getWorldMembers는 users를 조인해 user_id가 아니라 id로 돌려준다
+          const isMember = world.owner_id === user.id || members.some(mm => (mm.id || mm.user_id) === user.id);
           if (!isMember) return json(res, { error: '이 세계관의 멤버가 아닙니다. 초대 코드로 먼저 참여해주세요.' }, 403);
           const b = sanitizeCharFields(await readBody(req));
           if (!b.name || !b.handle) return json(res, { error: '이름과 핸들을 입력해주세요.' }, 400);
@@ -660,7 +703,7 @@ const server = http.createServer(async (req, res) => {
           const char = myChars.find(c => c.id === b.character_id);
           if (!char) return json(res, { error: '본인 캐릭터가 아닙니다.' }, 403);
           const id = nanoid();
-          await createPost({ id, character_id: b.character_id, world_id: world.id, content: b.content||'', reply_to_id: b.reply_to_id||null, created_at: now() });
+          await createPost({ id, character_id: b.character_id, world_id: world.id, content: b.content||'', reply_to_id: b.reply_to_id||null, is_sensitive: b.is_sensitive, created_at: now() });
           if (b.media_urls?.length) {
             for (let i = 0; i < Math.min(b.media_urls.length, 4); i++) {
               await addPostMedia({ id: nanoid(), post_id: id, url: b.media_urls[i], media_type: /\.(mp4|webm)$/i.test(b.media_urls[i]) ? 'video' : 'image', sort_order: i });
@@ -809,15 +852,12 @@ const server = http.createServer(async (req, res) => {
         if (!post) return json(res, { error: 'Not found' }, 404);
         const pool = getDb();
 
-        // 관리자 강제 블러
-        if (b?.force_sensitive) {
-          const worldForPost = await getWorldById(post.world_id);
-          const admins = await getWorldAdmins(post.world_id);
-          const isAdmin = user.role === 'admin' || worldForPost?.owner_id === user.id
-            || admins.some(a => a.user_id === user.id);
-          if (!isAdmin) return json(res, { error: 'Forbidden' }, 403);
-          await pool.query('UPDATE posts SET is_sensitive = 1 WHERE id = $1', [postId]);
-          return json(res, { ok: true });
+        // 관리자 강제 블러 / 해제
+        if (b?.force_sensitive !== undefined) {
+          if (!(await isModerator(user, post.world_id))) return json(res, { error: 'Forbidden' }, 403);
+          const updated = await setPostSensitive(postId, !!b.force_sensitive, user.id);
+          console.log('[모더레이션]', user.id, b.force_sensitive ? '블러' : '해제', postId);
+          return json(res, { ok: true, post: updated });
         }
 
         const c = await getCharById(post.character_id);
@@ -853,7 +893,11 @@ const server = http.createServer(async (req, res) => {
         const post = await getPostById(postId);
         if (!post) return json(res, { error: 'Not found' }, 404);
         const c = await getCharById(post.character_id);
-        if (!c || c.user_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
+        // 본인 글이거나 세계관 모더레이터면 삭제 가능.
+        // 예전에는 작성자만 가능해서 관리자가 문제 글을 못 지웠다.
+        const isOwner = c && c.user_id === user.id;
+        if (!isOwner && !(await isModerator(user, post.world_id))) return json(res, { error: 'Forbidden' }, 403);
+        if (!isOwner) console.log('[모더레이션] 관리자 삭제', user.id, postId);
         await deletePost(postId);
         return json(res, { ok: true });
       }

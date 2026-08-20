@@ -96,8 +96,14 @@ export async function initDb() {
     CREATE TABLE IF NOT EXISTS dm_messages (id TEXT PRIMARY KEY, room_id TEXT NOT NULL, sender_user_id TEXT NOT NULL, character_id TEXT, content TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS dm_reads (user_id TEXT NOT NULL, room_id TEXT NOT NULL, last_read_at TEXT NOT NULL, PRIMARY KEY (user_id, room_id));
     CREATE TABLE IF NOT EXISTS world_admins (world_id TEXT NOT NULL, user_id TEXT NOT NULL, granted_at TEXT NOT NULL, PRIMARY KEY (world_id, user_id));
+    ALTER TABLE invites ADD COLUMN IF NOT EXISTS expires_at TEXT;
+    ALTER TABLE invites ADD COLUMN IF NOT EXISTS max_uses INTEGER;
+    ALTER TABLE invites ADD COLUMN IF NOT EXISTS used_count INTEGER DEFAULT 0;
+    ALTER TABLE invites ADD COLUMN IF NOT EXISTS revoked INTEGER DEFAULT 0;
     ALTER TABLE posts ADD COLUMN IF NOT EXISTS is_sensitive INTEGER DEFAULT 0;
     ALTER TABLE posts ADD COLUMN IF NOT EXISTS force_sensitive INTEGER DEFAULT 0;
+    ALTER TABLE posts ADD COLUMN IF NOT EXISTS moderated_by TEXT;
+    ALTER TABLE posts ADD COLUMN IF NOT EXISTS moderated_at TEXT;
   `);
   console.log('✓ DB tables ready');
   // 인덱스 (없으면 생성, 있으면 무시)
@@ -175,6 +181,65 @@ export async function deleteSession(id) { await q('DELETE FROM sessions WHERE id
 export async function cleanupSessions() {
   const { rowCount } = await query('DELETE FROM sessions WHERE expires_at IS NOT NULL AND expires_at < $1', [new Date().toISOString()]);
   return rowCount || 0;
+}
+
+// ── 초대 코드 ──
+/** 세계관의 초대 코드 목록. 만료·소진 여부를 계산해서 함께 준다. */
+export async function getInvites(worldId) {
+  const { rows } = await query(
+    'SELECT * FROM invites WHERE world_id=$1 ORDER BY created_at DESC', [worldId]);
+  const nowIso = new Date().toISOString();
+  return rows.map(r => ({
+    ...r,
+    used_count: r.used_count || 0,
+    is_expired: !!(r.expires_at && r.expires_at < nowIso),
+    is_exhausted: !!(r.max_uses && (r.used_count || 0) >= r.max_uses),
+    is_revoked: !!r.revoked,
+  }));
+}
+export async function createInvite({ code, world_id, created_by, created_at, expires_at = null, max_uses = null }) {
+  await query(
+    `INSERT INTO invites (code,world_id,created_by,created_at,expires_at,max_uses,used_count,revoked)
+     VALUES ($1,$2,$3,$4,$5,$6,0,0)`,
+    [code, world_id, created_by, created_at, expires_at, max_uses]);
+  return { code, world_id, created_by, created_at, expires_at, max_uses, used_count: 0, revoked: 0 };
+}
+export async function revokeInvite(code, worldId) {
+  const { rowCount } = await query('UPDATE invites SET revoked=1 WHERE code=$1 AND world_id=$2', [code, worldId]);
+  return rowCount > 0;
+}
+/**
+ * 초대 코드 사용. 만료·소진·폐기를 원자적으로 검사하고 카운트를 올린다.
+ * 동시에 여러 명이 마지막 1자리를 노려도 한 명만 성공한다.
+ */
+export async function consumeInvite(code) {
+  const nowIso = new Date().toISOString();
+  const { rows } = await query(
+    `UPDATE invites
+        SET used_count = COALESCE(used_count,0) + 1
+      WHERE code = $1
+        AND COALESCE(revoked,0) = 0
+        AND (expires_at IS NULL OR expires_at > $2)
+        AND (max_uses IS NULL OR COALESCE(used_count,0) < max_uses)
+      RETURNING *`, [code, nowIso]);
+  if (rows.length) return { ok: true, invite: rows[0] };
+  // 실패 사유를 구분해서 알려준다
+  const { rows: found } = await query('SELECT * FROM invites WHERE code=$1', [code]);
+  if (!found.length) return { ok: false, reason: 'not_found' };
+  const inv = found[0];
+  if (inv.revoked) return { ok: false, reason: 'revoked' };
+  if (inv.expires_at && inv.expires_at <= nowIso) return { ok: false, reason: 'expired' };
+  if (inv.max_uses && (inv.used_count || 0) >= inv.max_uses) return { ok: false, reason: 'exhausted' };
+  return { ok: false, reason: 'unknown' };
+}
+
+// ── 모더레이션 ──
+/** 관리자 강제 블러/해제. */
+export async function setPostSensitive(postId, on, byUserId) {
+  await query(
+    'UPDATE posts SET is_sensitive=$2, force_sensitive=$2, moderated_by=$3, moderated_at=$4 WHERE id=$1',
+    [postId, on ? 1 : 0, on ? byUserId : null, on ? new Date().toISOString() : null]);
+  return getPostById(postId);
 }
 
 // ── World ──
@@ -284,7 +349,10 @@ async function enrichPost(p) {
 }
 
 export async function createPost(p) {
-  await query('INSERT INTO posts (id,character_id,world_id,content,reply_to_id,is_pinned,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)',[p.id,p.character_id,p.world_id,p.content,p.reply_to_id||null,0,p.created_at]);
+  // is_sensitive: 프론트는 작성 시 이미 보내고 있었는데 서버가 저장하지 않아 버려졌다.
+  await query(
+    'INSERT INTO posts (id,character_id,world_id,content,reply_to_id,is_pinned,is_sensitive,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+    [p.id, p.character_id, p.world_id, p.content, p.reply_to_id || null, 0, p.is_sensitive ? 1 : 0, p.created_at]);
 }
 export async function getPostById(id) {
   return enrichPost(id);
