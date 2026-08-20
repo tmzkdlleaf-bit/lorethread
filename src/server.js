@@ -1,7 +1,8 @@
 import 'dotenv/config';
 import http from 'http';
+import { createHash } from 'crypto';
 import { readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs';
-import { join, dirname, extname } from 'path';
+import { join, dirname, extname, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { parse as parseCookie } from 'cookie';
 import bcrypt from 'bcryptjs';
@@ -15,13 +16,14 @@ import {
   getCharsByWorld, getCharsByUser, getCharById, getCharByHandle, createChar, updateChar,
   getCharSections, setCharSections, getCharLinks, setCharLinks,
   createPost, getPostById, getPostsByWorld, getPostsByFollowing, getReplies, deletePost, getPostsByChar,
-  addPostMedia, getReaction, addReaction, removeReaction, getReactionCount,
+  addPostMedia, getReaction, addReaction, removeReaction, getReactionCount, getReactedPostIds,
   createNotif, getNotifs, getUnreadCount, markAllRead,
   getAnnouncements, createAnnouncement, deleteAnnouncement,
   getWorldAdmins, setWorldAdmin, deleteUserAccount,
   getFollowerCount, getFollowingCount,
   createRoom, getRoomsByUser, getRoomById, addRoomMember, getRoomMembers,
-  isRoomMember, createDmMessage, getDmMessages, getUnreadDmCount, markDmRead, findDmRoom
+  isRoomMember, createDmMessage, getDmMessages, getUnreadDmCount, markDmRead, findDmRoom,
+  cleanupSessions, deleteWorldCascade, SESSION_TTL_DAYS
 } from './db.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -34,9 +36,99 @@ cloudinary.config({
 });
 
 const ALLOWED_UPLOAD_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.mp4', '.webm']);
-const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50MB
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // 10MB — 핸들러 쪽 제한과 일치시킴
+const ALLOWED_UPLOAD_TYPES = new Set(['image/jpeg','image/jpg','image/png','image/gif','image/webp','video/mp4','video/webm']);
 const UPLOADS_DIR = join(__dirname, '../tmp_uploads');
 if (!existsSync(UPLOADS_DIR)) mkdirSync(UPLOADS_DIR, { recursive: true });
+
+// ── 보안/검증 유틸 ──
+const IS_PROD = process.env.NODE_ENV === 'production' || !!process.env.RAILWAY_ENVIRONMENT;
+// 로컬 http 개발 시 Secure 쿠키는 Safari/Firefox에서 거부된다.
+const COOKIE_ATTRS = IS_PROD
+  ? 'Path=/; HttpOnly; SameSite=None; Secure'
+  : 'Path=/; HttpOnly; SameSite=Lax';
+const SESSION_MAX_AGE = SESSION_TTL_DAYS * 86400;
+
+/** 신뢰할 수 있는 클라이언트 IP. x-forwarded-for는 위조 가능하므로
+ *  Railway 등 프록시 1홉 뒤라는 전제에서 '마지막' 값을 쓴다. */
+function clientIp(req) {
+  const xff = req.headers['x-forwarded-for'];
+  if (xff) {
+    const parts = String(xff).split(',').map(x => x.trim()).filter(Boolean);
+    if (parts.length) return parts[parts.length - 1];
+  }
+  return req.socket.remoteAddress || 'unknown';
+}
+
+function sessionCookie(sid) { return `session=${sid}; ${COOKIE_ATTRS}; Max-Age=${SESSION_MAX_AGE}`; }
+
+// 이 브라우저가 실제로 로그인한 세션 ID 목록. 계정 전환은 이 안에서만 허용된다.
+function readAccountSids(req) {
+  try {
+    const raw = parseCookie(req.headers.cookie || '').accounts || '';
+    const cur = parseCookie(req.headers.cookie || '').session;
+    const list = raw.split(',').map(x => x.trim()).filter(x => /^[A-Za-z0-9_-]{16,64}$/.test(x));
+    if (cur && !list.includes(cur)) list.unshift(cur);
+    return list.slice(0, 10);
+  } catch { return []; }
+}
+function accountsCookie(sids) {
+  return `accounts=${sids.slice(0, 10).join(',')}; ${COOKIE_ATTRS}; Max-Age=${SESSION_MAX_AGE}`;
+}
+
+// 허용 오리진: 쉼표로 여러 개, 끝 슬래시는 무시
+const ALLOWED_ORIGINS = (process.env.FRONTEND_URL || 'http://localhost:3000')
+  .split(',').map(x => x.trim().replace(/\/$/, '')).filter(Boolean);
+
+/** 이미지/영상 URL 화이트리스트. 저장형 XSS(javascript:, onerror= 등) 차단. */
+const SAFE_URL_HOSTS = ['res.cloudinary.com'];
+function safeUrl(v) {
+  if (v === undefined || v === null || v === '') return '';
+  const str = String(v).trim();
+  if (!str) return '';
+  try {
+    const u = new URL(str);
+    if (u.protocol !== 'https:') return '';
+    if (!SAFE_URL_HOSTS.some(h => u.hostname === h || u.hostname.endsWith('.' + h))) return '';
+    return u.toString();
+  } catch { return ''; }
+}
+/** #RRGGBB 형식만 허용. */
+function safeColor(v, fallback = '') {
+  const str = String(v ?? '').trim();
+  return /^#[0-9a-fA-F]{6}$/.test(str) ? str : fallback;
+}
+/** 자유 텍스트에서 제어문자 제거 + 길이 제한. */
+function safeText(v, max = 200) {
+  return String(v ?? '').replace(/[\u0000-\u001F\u007F]/g, '').slice(0, max);
+}
+/** 캐릭터/세계관 입력에서 위험 필드를 정규화한다. */
+function sanitizeCharFields(b) {
+  const out = { ...b };
+  for (const k of ['avatar_url', 'header_url']) if (k in out) out[k] = safeUrl(out[k]);
+  if ('color_bg' in out) out.color_bg = safeColor(out.color_bg, '#E6F1FB');
+  if ('color_fg' in out) out.color_fg = safeColor(out.color_fg, '#185FA5');
+  if ('role' in out) out.role = safeText(out.role, 40);
+  if ('name' in out) out.name = safeText(out.name, 60);
+  if ('bio'  in out) out.bio  = safeText(out.bio, 2000);
+  return out;
+}
+function sanitizeWorldFields(b) {
+  const out = { ...b };
+  for (const k of ['banner_image_url', 'icon_image_url', 'bg_image_url']) if (k in out) out[k] = safeUrl(out[k]);
+  if ('banner_color' in out) out.banner_color = safeColor(out.banner_color, '#185FA5');
+  if ('custom_font' in out) out.custom_font = safeText(out.custom_font, 60).replace(/[^\w\s\-,'"가-힣]/g, '');
+  if ('name' in out) out.name = safeText(out.name, 60);
+  if ('description' in out) out.description = safeText(out.description, 2000);
+  if ('announce_text' in out) out.announce_text = safeText(out.announce_text, 2000);
+  return out;
+}
+/** LIMIT/OFFSET용 정수 파싱. NaN이 그대로 넘어가면 PG가 500을 낸다. */
+function clampInt(v, def, min, max) {
+  const n = parseInt(v, 10);
+  if (!Number.isFinite(n)) return def;
+  return Math.min(Math.max(n, min), max);
+}
 
 // ── SSE ──
 const sseClients = new Map();
@@ -48,11 +140,17 @@ function readBody(req) {
   return new Promise(resolve => {
     const ch = [];
     req.on('data', c => ch.push(c));
-    req.on('end', () => { try { resolve(JSON.parse(Buffer.concat(ch).toString())); } catch { resolve({}); } });
+    req.on('end', () => {
+      const raw = Buffer.concat(ch).toString();
+      if (!raw) return resolve({});
+      try { resolve(JSON.parse(raw)); }
+      catch { console.error('[본문 파싱 실패]', req.method, req.url, raw.slice(0, 200)); resolve({}); }
+    });
   });
 }
 
 async function readMultipart(req) {
+  let rejected = null;
   return new Promise((resolve) => {
     const ch = [];
     req.on('data', c => ch.push(c));
@@ -61,14 +159,15 @@ async function readMultipart(req) {
         const buf = Buffer.concat(ch);
         const ct = req.headers['content-type'] || '';
         const bm = ct.match(/boundary=(.+)/);
-        if (!bm) return resolve({ files: [] });
+        if (!bm) return resolve({ files: [], rejected: null });
         const boundary = '--' + bm[1].trim();
         const bb = Buffer.from(boundary);
+        // 바이트 단위 루프는 10MB에서 수천만 번 비교하며 이벤트 루프를 막는다.
+        // Buffer.indexOf는 네이티브 구현이라 비교가 안 되게 빠르다.
         const pos = [];
-        for (let i = 0; i <= buf.length - bb.length; i++) {
-          if (buf.slice(i, i + bb.length).equals(bb)) pos.push(i);
-        }
+        for (let i = buf.indexOf(bb, 0); i !== -1; i = buf.indexOf(bb, i + bb.length)) pos.push(i);
         const uploads = [];
+        // 거절 사유를 호출자에게 알려준다.
         for (let pi = 0; pi < pos.length - 1; pi++) {
           const ps = pos[pi] + bb.length + 2;
           const pe = pos[pi + 1] - 2;
@@ -81,8 +180,12 @@ async function readMultipart(req) {
           const fn = hdr.match(/filename="([^"]+)"/)?.[1];
           if (fn) {
             const ext = extname(fn).toLowerCase() || '.bin';
-            if (!ALLOWED_UPLOAD_EXTS.has(ext)) continue;
-            if (data.length > MAX_UPLOAD_BYTES) continue;
+            // 파트 헤더의 Content-Type. 기존 코드는 요청 전체의 content-type을
+            // 넣어 두어 핸들러의 허용 타입 검사가 100% 실패했다.
+            const partType = (hdr.match(/Content-Type:\s*([^\r\n;]+)/i)?.[1] || '').trim().toLowerCase();
+            if (!ALLOWED_UPLOAD_EXTS.has(ext)) { rejected = '지원하지 않는 파일 형식입니다.'; continue; }
+            if (partType && !ALLOWED_UPLOAD_TYPES.has(partType)) { rejected = '지원하지 않는 파일 형식입니다.'; continue; }
+            if (data.length > MAX_UPLOAD_BYTES) { rejected = '파일 크기는 10MB를 초과할 수 없습니다.'; continue; }
             const tmpPath = join(UPLOADS_DIR, nanoid() + ext);
             writeFileSync(tmpPath, data);
             try {
@@ -95,16 +198,16 @@ async function readMultipart(req) {
                   { fetch_format: 'auto' },           // WebP 등 최적 포맷 자동 선택
                 ],
               });
-              uploads.push({ url: result.secure_url, size: part.length, type: ct });
+              uploads.push({ url: result.secure_url, size: data.length, type: partType, ext });
             } finally {
               try { unlinkSync(tmpPath); } catch {}
             }
           }
         }
-        resolve({ files: uploads });
-      } catch (e) { console.error('Upload error:', e); resolve({ files: [] }); }
+        resolve({ files: uploads, rejected });
+      } catch (e) { console.error('Upload error:', e); resolve({ files: [], rejected: '업로드 처리 중 오류가 발생했습니다.' }); }
     });
-    req.on('error', () => resolve({ files: [] }));
+    req.on('error', () => resolve({ files: [], rejected: null }));
   });
 }
 
@@ -123,11 +226,20 @@ function json(res, data, status = 200) {
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(data));
 }
-function serveFile(res, fp) {
+function serveFile(res, fp, req) {
   try {
     const content = readFileSync(fp);
     const mime = { '.html':'text/html; charset=utf-8', '.css':'text/css', '.js':'application/javascript', '.png':'image/png', '.jpg':'image/jpeg', '.jpeg':'image/jpeg', '.gif':'image/gif', '.webp':'image/webp', '.mp4':'video/mp4', '.webm':'video/webm', '.svg':'image/svg+xml' };
-    res.writeHead(200, { 'Content-Type': mime[extname(fp).toLowerCase()] || 'application/octet-stream' });
+    const ext = extname(fp).toLowerCase();
+    // 279KB짜리 index.html을 매 요청 재전송하지 않도록 ETag/캐시 헤더를 붙인다.
+    const etag = 'W/"' + content.length.toString(16) + '-' + createHash('sha1').update(content).digest('hex').slice(0, 16) + '"';
+    const cache = ext === '.html' ? 'no-cache' : 'public, max-age=86400';
+    if (req && req.headers['if-none-match'] === etag) { res.writeHead(304, { 'ETag': etag, 'Cache-Control': cache }); return res.end(); }
+    res.writeHead(200, {
+      'Content-Type': mime[ext] || 'application/octet-stream',
+      'ETag': etag,
+      'Cache-Control': cache,
+    });
     res.end(content);
   } catch { res.writeHead(404); res.end('Not found'); }
 }
@@ -141,17 +253,33 @@ const server = http.createServer(async (req, res) => {
     const path = decodeURIComponent(rawPath);
     const m = req.method;
 
-    const allowedOrigin = process.env.FRONTEND_URL || 'http://localhost:3000';
-    res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+    const reqOrigin = (req.headers.origin || '').replace(/\/$/, '');
+    if (reqOrigin && ALLOWED_ORIGINS.includes(reqOrigin)) {
+      res.setHeader('Access-Control-Allow-Origin', reqOrigin);
+      res.setHeader('Vary', 'Origin');
+    } else if (reqOrigin) {
+      // 차단될 때 원인이 로그에 남는다 (기존에는 조용히 실패했다)
+      console.warn('[CORS 차단]', reqOrigin, '— 허용 목록:', ALLOWED_ORIGINS.join(', '));
+    }
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
     if (m === 'OPTIONS') { res.writeHead(204); return res.end(); }
 
-    if (rawPath.startsWith('/static/')) return serveFile(res, join(__dirname, '../public', rawPath));
+    if (rawPath.startsWith('/static/')) {
+      // join()이 '..'를 정규화하므로 /static/../../.env 로 소스와 .env가 새어나갔다.
+      // resolve 후 public/ 밖이면 거부한다.
+      const PUBLIC_DIR = resolve(__dirname, '../public');
+      const target = resolve(PUBLIC_DIR, '.' + rawPath.slice('/static'.length));
+      if (target !== PUBLIC_DIR && !target.startsWith(PUBLIC_DIR + sep)) {
+        res.writeHead(403); return res.end('Forbidden');
+      }
+      return serveFile(res, target, req);
+    }
 
     const user = await getSessionUser(req);
 
+    
     // ── SSE ──
     if (path === '/api/events') {
       if (!user) { res.writeHead(401); return res.end(); }
@@ -159,16 +287,32 @@ const server = http.createServer(async (req, res) => {
       res.write('data: {"type":"connected"}\n\n');
       if (!sseClients.has(user.id)) sseClients.set(user.id, new Set());
       sseClients.get(user.id).add(res);
-      req.on('close', () => sseClients.get(user.id)?.delete(res));
+
+      // 하트비트가 없으면 Railway 프록시가 유휴 연결을 끊어 실시간 알림이 조용히 죽는다.
+      const hb = setInterval(() => { try { res.write(': ping\n\n'); } catch { clearInterval(hb); } }, 25000);
+      const cleanup = () => {
+        clearInterval(hb);
+        const set = sseClients.get(user.id);
+        if (set) { set.delete(res); if (!set.size) sseClients.delete(user.id); } // 빈 Set 누수 방지
+      };
+      req.on('close', cleanup);
+      req.on('error', cleanup);
       return;
     }
 
     // ── Auth ──
     if (path === '/api/auth/register' && m === 'POST') {
-      const ip = req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress || 'unknown';
+      const ip = clientIp(req);
       if (rateLimit(ip, 'register', 5, 3600000)) return json(res, { error: '가입 요청이 너무 많습니다. 1시간 후 다시 시도해주세요.' }, 429);
       const b = await readBody(req);
-      if (!b.email || !b.password || !b.display_name) return json(res, { error: '모든 항목을 입력해주세요.' }, 400);
+      if (typeof b.email !== 'string' || typeof b.password !== 'string' || typeof b.display_name !== 'string'
+          || !b.email.trim() || !b.password || !b.display_name.trim()) {
+        return json(res, { error: '모든 항목을 입력해주세요.' }, 400);
+      }
+      if (b.password.length < 8) return json(res, { error: '비밀번호는 8자 이상이어야 합니다.' }, 400);
+      if (b.password.length > 200) return json(res, { error: '비밀번호가 너무 깁니다.' }, 400);
+      b.email = b.email.trim();
+      b.display_name = safeText(b.display_name, 40);
       if (await getUserByEmail(b.email)) return json(res, { error: '이미 사용 중인 이메일입니다.' }, 400);
       const pool = getDb();
       const cnt = await pool.query('SELECT COUNT(*) as cnt FROM users').then(r => parseInt(r.rows[0].cnt));
@@ -178,26 +322,42 @@ const server = http.createServer(async (req, res) => {
       await createUser({ id, email: b.email, password_hash: hash, display_name: b.display_name, role, theme: 'light', created_at: now() });
       const sid = nanoid(32);
       await createSession({ id: sid, user_id: id, created_at: now() });
-      res.setHeader('Set-Cookie', `session=${sid}; Path=/; HttpOnly; Max-Age=2592000; SameSite=None; Secure`);
+      res.setHeader('Set-Cookie', [sessionCookie(sid), accountsCookie([sid, ...readAccountSids(req)])]);
       return json(res, { ok: true, user: { id, email: b.email, display_name: b.display_name, role } });
     }
 
     if (path === '/api/auth/login' && m === 'POST') {
-      const ip = req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress || 'unknown';
+      const ip = clientIp(req);
       if (rateLimit(ip, 'login', 10, 60000)) return json(res, { error: '잠시 후 다시 시도해주세요.' }, 429);
       const b = await readBody(req);
-      const u = await getUserByEmail(b.email);
-      if (!u || !(await bcrypt.compare(b.password, u.password_hash))) return json(res, { error: '이메일 또는 비밀번호가 올바르지 않습니다.' }, 401);
+      // 입력이 조금만 이상해도 bcrypt.compare가 예외를 던져 500이 났다.
+      if (typeof b.email !== 'string' || typeof b.password !== 'string' || !b.email || !b.password) {
+        return json(res, { error: '이메일과 비밀번호를 입력해주세요.' }, 400);
+      }
+      const u = await getUserByEmail(b.email.trim());
+      // password_hash가 비어 있는 계정(이관 사고 등)도 500 대신 401로 떨어뜨린다.
+      if (!u || typeof u.password_hash !== 'string' || !u.password_hash.startsWith('$2')) {
+        if (u) console.error('[로그인] password_hash 손상:', u.id);
+        return json(res, { error: '이메일 또는 비밀번호가 올바르지 않습니다.' }, 401);
+      }
+      if (!(await bcrypt.compare(b.password, u.password_hash))) {
+        return json(res, { error: '이메일 또는 비밀번호가 올바르지 않습니다.' }, 401);
+      }
       const sid = nanoid(32);
       await createSession({ id: sid, user_id: u.id, created_at: now() });
-      res.setHeader('Set-Cookie', `session=${sid}; Path=/; HttpOnly; Max-Age=2592000; SameSite=None; Secure`);
+      res.setHeader('Set-Cookie', [sessionCookie(sid), accountsCookie([sid, ...readAccountSids(req)])]);
       return json(res, { ok: true, user: { id: u.id, email: u.email, display_name: u.display_name, role: u.role } });
     }
 
     if (path === '/api/auth/logout' && m === 'POST') {
       const cookies = parseCookie(req.headers.cookie || '');
-      if (cookies.session) await deleteSession(cookies.session);
-      res.setHeader('Set-Cookie', 'session=; Path=/; Max-Age=0; SameSite=None; Secure');
+      const cur = cookies.session;
+      if (cur) await deleteSession(cur);
+      const rest = readAccountSids(req).filter(x => x !== cur);
+      res.setHeader('Set-Cookie', [
+        `session=; ${COOKIE_ATTRS}; Max-Age=0`,
+        rest.length ? accountsCookie(rest) : `accounts=; ${COOKIE_ATTRS}; Max-Age=0`,
+      ]);
       return json(res, { ok: true });
     }
 
@@ -215,24 +375,20 @@ const server = http.createServer(async (req, res) => {
 
     if (path === '/api/upload' && m === 'POST') {
       if (!user) return json(res, { error: 'Unauthorized' }, 401);
-      // 요청 크기 제한 (10MB)
-      const contentLength = parseInt(req.headers['content-length'] || '0');
+      // 업로드는 Cloudinary 요금과 직결되므로 레이트 리밋을 건다.
+      if (rateLimit(clientIp(req), 'upload', 30, 60000)) {
+        return json(res, { error: '업로드 요청이 너무 많습니다. 잠시 후 다시 시도해주세요.' }, 429);
+      }
+      const contentLength = parseInt(req.headers['content-length'] || '0', 10);
       if (contentLength > 10 * 1024 * 1024) {
         return json(res, { error: '파일 크기는 10MB를 초과할 수 없습니다.' }, 413);
       }
-      const { files } = await readMultipart(req);
-      // 각 파일 크기 검사
-      for (const f of files) {
-        if (f.size && f.size > 10 * 1024 * 1024) {
-          return json(res, { error: '파일 크기는 10MB를 초과할 수 없습니다.' }, 413);
-        }
-      }
-      // 허용 타입 검사
-      const allowedTypes = ['image/jpeg','image/png','image/gif','image/webp','video/mp4','video/webm'];
-      for (const f of files) {
-        if (f.type && !allowedTypes.includes(f.type)) {
-          return json(res, { error: '지원하지 않는 파일 형식입니다.' }, 415);
-        }
+      // 크기/타입 검증은 readMultipart 내부에서 Cloudinary 업로드 '전에' 수행된다.
+      // 예전에는 업로드가 끝난 뒤 검사해서, 거절해도 요금은 이미 나갔다.
+      // 또 f.type에 요청 전체의 content-type이 들어가 있어 항상 415가 떨어졌다.
+      const { files, rejected } = await readMultipart(req);
+      if (!files.length) {
+        return json(res, { error: rejected || '업로드할 파일이 없습니다.' }, rejected ? 415 : 400);
       }
       return json(res, { ok: true, urls: files.map(f => f.url) });
     }
@@ -265,28 +421,43 @@ const server = http.createServer(async (req, res) => {
     // ── 계정 전환 ──
     if (path === '/api/accounts' && m === 'GET') {
       if (!user) return json(res, { error: 'Unauthorized' }, 401);
-      const pool = getDb();
-      const sessions = await pool.query('SELECT DISTINCT user_id FROM sessions').then(r => r.rows);
+      // 예전에는 sessions 테이블 전체를 훑어 모든 유저의 이메일을 반환했다.
+      // 이제는 이 브라우저가 실제로 로그인한 세션들만 본다.
+      const sids = readAccountSids(req);
       const seen = new Set();
-      const accounts = (await Promise.all(sessions.map(s => getUser(s.user_id)))).filter(u => {
-        if (!u || seen.has(u.id)) return false;
-        seen.add(u.id); return true;
-      }).map(u => ({ user_id: u.id, display_name: u.display_name, email: u.email, role: u.role }));
+      const accounts = [];
+      for (const sid of sids) {
+        const sess = await getSession(sid);
+        if (!sess) continue;
+        if (seen.has(sess.user_id)) continue;
+        const u = await getUser(sess.user_id);
+        if (!u) continue;
+        seen.add(u.id);
+        accounts.push({ user_id: u.id, display_name: u.display_name, email: u.email, role: u.role });
+      }
       return json(res, { accounts });
     }
     if (path === '/api/accounts/switch' && m === 'POST') {
       if (!user) return json(res, { error: 'Unauthorized' }, 401);
       const b = await readBody(req);
+      if (!b.user_id) return json(res, { error: '계정을 지정해주세요.' }, 400);
+
+      // 핵심: 이 브라우저가 보유한 세션 중에서만 전환을 허용한다.
+      // 예전에는 아무 user_id나 넣으면 비밀번호 없이 그 계정이 되었다.
+      const sids = readAccountSids(req);
+      let targetSid = null;
+      for (const sid of sids) {
+        const sess = await getSession(sid);
+        if (sess && sess.user_id === b.user_id) { targetSid = sid; break; }
+      }
+      if (!targetSid) {
+        console.warn('[계정 전환 거부] user', user.id, '→', b.user_id);
+        return json(res, { error: '해당 계정으로 먼저 로그인해주세요.' }, 403);
+      }
       const target = await getUser(b.user_id);
       if (!target) return json(res, { error: '계정을 찾을 수 없습니다.' }, 404);
-      const pool = getDb();
-      let sess = await pool.query('SELECT * FROM sessions WHERE user_id=$1 LIMIT 1', [target.id]).then(r => r.rows[0]);
-      if (!sess) {
-        const sid = nanoid(32);
-        await createSession({ id: sid, user_id: target.id, created_at: now() });
-        sess = { id: sid };
-      }
-      res.setHeader('Set-Cookie', `session=${sess.id}; Path=/; HttpOnly; Max-Age=2592000; SameSite=None; Secure`);
+
+      res.setHeader('Set-Cookie', [sessionCookie(targetSid), accountsCookie(sids)]);
       return json(res, { ok: true, user: { id: target.id, email: target.email, display_name: target.display_name, role: target.role } });
     }
 
@@ -327,24 +498,9 @@ const server = http.createServer(async (req, res) => {
         if (!user || world.owner_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
         const pool = getDb();
         const charIds = await pool.query('SELECT id FROM characters WHERE world_id=$1', [world.id]).then(r => r.rows.map(c => c.id));
-        for (const cid of charIds) {
-          await pool.query('DELETE FROM char_sections WHERE character_id=$1', [cid]);
-          await pool.query('DELETE FROM char_links WHERE character_id=$1', [cid]);
-        }
-        const postIds = await pool.query('SELECT id FROM posts WHERE world_id=$1', [world.id]).then(r => r.rows.map(p => p.id));
-        for (const pid of postIds) {
-          await pool.query('DELETE FROM post_media WHERE post_id=$1', [pid]);
-          await pool.query('DELETE FROM reactions WHERE post_id=$1', [pid]);
-        }
-        await pool.query('DELETE FROM posts WHERE world_id=$1', [world.id]);
-        await pool.query('DELETE FROM characters WHERE world_id=$1', [world.id]);
-        await pool.query('DELETE FROM world_members WHERE world_id=$1', [world.id]);
-        await pool.query('DELETE FROM announcements WHERE world_id=$1', [world.id]);
-        await pool.query('DELETE FROM events WHERE world_id=$1', [world.id]);
-        await pool.query('DELETE FROM invites WHERE world_id=$1', [world.id]);
-        await pool.query('DELETE FROM worlds WHERE id=$1', [world.id]);
-        // 알림 고아 레코드 정리
-        await pool.query('DELETE FROM notifications WHERE post_id IN (SELECT id FROM posts WHERE world_id=$1)', [world.id]);
+        // 삭제 순서가 뒤바뀌어 알림 고아 레코드가 영구히 남았고,
+        // 트랜잭션이 없어 중간 실패 시 데이터가 반쯤 지워졌다.
+        await deleteWorldCascade(world.id);
         return json(res, { ok: true });
       }
 
@@ -354,8 +510,13 @@ const server = http.createServer(async (req, res) => {
           return json(res, { world, members: await getWorldMembers(world.id) });
         }
         if (m === 'PATCH') {
-          if (!world || world.owner_id !== user?.id) return json(res, { error: 'Forbidden' }, 403);
-          const b = await readBody(req);
+          if (!world || !user) return json(res, { error: 'Forbidden' }, 403);
+          // world_admins 테이블이 있는데 여태 owner만 검사했다. 관리자도 허용한다.
+          const wAdmins = await getWorldAdmins(world.id);
+          const canEdit = world.owner_id === user.id || user.role === 'admin'
+            || wAdmins.some(a => a.user_id === user.id);
+          if (!canEdit) return json(res, { error: 'Forbidden' }, 403);
+          const b = sanitizeWorldFields(await readBody(req));
           const updated = await updateWorld(world.id, b);
           return json(res, { ok: true, world: updated || world });
         }
@@ -438,7 +599,7 @@ const server = http.createServer(async (req, res) => {
         if (!world) return json(res, { error: 'Not found' }, 404);
         if (!user) return json(res, { posts: [] });
         const qs = new URL(req.url, `http://localhost:${PORT}`).searchParams;
-        const offset = parseInt(qs.get('offset') || '0');
+        const offset = clampInt(qs.get('offset'), 0, 0, 1000000);
         const myChars = await getCharsByUser(user.id, world.id);
         const myCharIds = myChars.map(c => c.id);
         if (!myCharIds.length) return json(res, { posts: [] });
@@ -449,10 +610,10 @@ const server = http.createServer(async (req, res) => {
         if (!followingIds.length) return json(res, { posts: [] });
         // DB에서 직접 팔로잉 포스트만 페이지네이션해서 가져옴
         const posts = await getPostsByFollowing(world.id, followingIds, 30, offset);
-        const enriched = await Promise.all(
-          posts.map(async p => ({ ...p, userReacted: (await Promise.all(myCharIds.map(cid => getReaction(p.id, cid)))).some(Boolean) }))
-        );
-        return json(res, { posts: enriched });
+        // 예전: 포스트 30개 × 내 캐릭터 N개 = 최대 수십 번의 개별 쿼리.
+        // 지금: 한 번의 쿼리로 반응한 post_id 집합을 받아온다.
+        const reacted = await getReactedPostIds(posts.map(p => p.id), myCharIds);
+        return json(res, { posts: posts.map(p => ({ ...p, userReacted: reacted.has(p.id) })) });
       }
 
       if (sub === 'characters') {
@@ -460,7 +621,11 @@ const server = http.createServer(async (req, res) => {
         if (m === 'GET') return json(res, { characters: await getCharsByWorld(world.id) });
         if (m === 'POST') {
           if (!user) return json(res, { error: 'Unauthorized' }, 401);
-          const b = await readBody(req);
+          // 예전에는 슬러그만 알면 누구나 남의 세계관에 캐릭터를 만들 수 있었다.
+          const members = await getWorldMembers(world.id);
+          const isMember = world.owner_id === user.id || members.some(mm => mm.user_id === user.id);
+          if (!isMember) return json(res, { error: '이 세계관의 멤버가 아닙니다. 초대 코드로 먼저 참여해주세요.' }, 403);
+          const b = sanitizeCharFields(await readBody(req));
           if (!b.name || !b.handle) return json(res, { error: '이름과 핸들을 입력해주세요.' }, 400);
           const handle = b.handle.toLowerCase().trim().replace(/[^a-z0-9_가-힣]/gi, '').slice(0, 20);
           if (await getCharByHandle(world.id, handle)) return json(res, { error: '이미 사용 중인 핸들입니다.' }, 400);
@@ -476,16 +641,18 @@ const server = http.createServer(async (req, res) => {
         if (!world) return json(res, { error: 'Not found' }, 404);
         if (m === 'GET') {
           const qs = new URL(req.url, `http://localhost:${PORT}`).searchParams;
-          const offset = parseInt(qs.get('offset') || '0');
+          const offset = clampInt(qs.get('offset'), 0, 0, 1000000);
           const tag = qs.get('tag') || '';
           const myChars = user ? await getCharsByUser(user.id, world.id) : [];
           const myCharIds = myChars.map(c => c.id);
           let posts = await getPostsByWorld(world.id, 30, offset, tag);
-          posts = await Promise.all(posts.map(async p => ({ ...p, userReacted: (await Promise.all(myCharIds.map(cid => getReaction(p.id, cid)))).some(Boolean) })));
+          const reacted = await getReactedPostIds(posts.map(p => p.id), myCharIds);
+          posts = posts.map(p => ({ ...p, userReacted: reacted.has(p.id) }));
           return json(res, { posts });
         }
         if (m === 'POST') {
           if (!user) return json(res, { error: 'Unauthorized' }, 401);
+          if (rateLimit(clientIp(req), 'post', 20, 60000)) return json(res, { error: '글 작성이 너무 잦습니다. 잠시 후 다시 시도해주세요.' }, 429);
           const b = await readBody(req);
           if (!b.content && !b.media_urls?.length) return json(res, { error: '내용을 입력해주세요.' }, 400);
           if (!b.character_id) return json(res, { error: '캐릭터를 선택해주세요.' }, 400);
@@ -566,25 +733,17 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (!sub && m === 'PATCH') {
-        // 관리자 강제 블러
-        if (b?.force_sensitive) {
-          const postChar = await getCharById(post.character_id);
-          const worldForPost = await getWorldById(post.world_id);
-          const isAdmin = user?.role === 'admin' || worldForPost?.owner_id === user?.id;
-          const admins = await getWorldAdmins(post.world_id);
-          const isWorldAdm = admins.some(a => a.user_id === user?.id);
-          if (!isAdmin && !isWorldAdm) return json(res, { error: 'Forbidden' }, 403);
-          await pool.query('UPDATE posts SET is_sensitive = 1 WHERE id = $1', [postId]);
-          return json(res, { ok: true });
-        }
+        // 포스트용 force_sensitive 블록이 여기 잘못 복사돼 있었다.
+        // post/b/pool이 정의되기 전에 참조해 캐릭터 수정이 100% 500이었다.
         if (!user) return json(res, { error: 'Unauthorized' }, 401);
         const c = await getCharById(charId);
+        if (!c) return json(res, { error: 'Not found' }, 404);
         const isAdminDel = user.role === 'admin';
-        const delWorld = await getWorldById(post.world_id);
-        const delWorldAdmins = await getWorldAdmins(post.world_id);
+        const delWorld = await getWorldById(c.world_id);
+        const delWorldAdmins = await getWorldAdmins(c.world_id);
         const isWorldAdminDel = delWorld?.owner_id === user.id || delWorldAdmins.some(a => a.user_id === user.id);
-        if (!isAdminDel && !isWorldAdminDel && (!c || c.user_id !== user.id)) return json(res, { error: 'Forbidden' }, 403);
-        const b = await readBody(req);
+        if (!isAdminDel && !isWorldAdminDel && c.user_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
+        const b = sanitizeCharFields(await readBody(req));
         await updateChar(charId, b);
         if (b.sections) await setCharSections(charId, b.sections);
         if (b.links) await setCharLinks(charId, b.links);
@@ -635,31 +794,36 @@ const server = http.createServer(async (req, res) => {
         while (cur) { ancestors.unshift(cur); cur = cur.reply_to_id ? await getPostById(cur.reply_to_id) : null; }
         const myChars = user ? await getCharsByUser(user.id, post.world_id) : [];
         const myCharIds = myChars.map(c => c.id);
-        const enrich = async p => ({ ...p, userReacted: (await Promise.all(myCharIds.map(cid => getReaction(p.id, cid)))).some(Boolean) });
-        return json(res, { ancestors: await Promise.all(ancestors.map(enrich)), post: await enrich(post), replies: await Promise.all((await getReplies(postId)).map(enrich)) });
+        const replies = await getReplies(postId);
+        const all = [...ancestors, post, ...replies];
+        const reacted = await getReactedPostIds(all.map(p => p.id), myCharIds);
+        const enrich = p => ({ ...p, userReacted: reacted.has(p.id) });
+        return json(res, { ancestors: ancestors.map(enrich), post: enrich(post), replies: replies.map(enrich) });
       }
 
       if (!sub && m === 'PATCH') {
+        if (!user) return json(res, { error: 'Unauthorized' }, 401);
+        // b/post/pool을 참조보다 먼저 선언한다. 예전에는 TDZ로 매번 500이었다.
+        const b = await readBody(req);
+        const post = await getPostById(postId);
+        if (!post) return json(res, { error: 'Not found' }, 404);
+        const pool = getDb();
+
         // 관리자 강제 블러
         if (b?.force_sensitive) {
-          const postChar = await getCharById(post.character_id);
           const worldForPost = await getWorldById(post.world_id);
-          const isAdmin = user?.role === 'admin' || worldForPost?.owner_id === user?.id;
           const admins = await getWorldAdmins(post.world_id);
-          const isWorldAdm = admins.some(a => a.user_id === user?.id);
-          if (!isAdmin && !isWorldAdm) return json(res, { error: 'Forbidden' }, 403);
+          const isAdmin = user.role === 'admin' || worldForPost?.owner_id === user.id
+            || admins.some(a => a.user_id === user.id);
+          if (!isAdmin) return json(res, { error: 'Forbidden' }, 403);
           await pool.query('UPDATE posts SET is_sensitive = 1 WHERE id = $1', [postId]);
           return json(res, { ok: true });
         }
-        if (!user) return json(res, { error: 'Unauthorized' }, 401);
-        const post = await getPostById(postId);
-        if (!post) return json(res, { error: 'Not found' }, 404);
+
         const c = await getCharById(post.character_id);
         if (!c || c.user_id !== user.id) return json(res, { error: 'Forbidden' }, 403);
-        const b = await readBody(req);
-        const pool = getDb();
         const updates = []; const vals = [];
-        if (b.content !== undefined) { updates.push(`content = $${updates.length+1}`); vals.push(b.content); }
+        if (b.content !== undefined) { updates.push(`content = $${updates.length+1}`); vals.push(String(b.content).slice(0, 10000)); }
         if (b.is_pinned !== undefined) { updates.push(`is_pinned = $${updates.length+1}`); vals.push(b.is_pinned ? 1 : 0); }
         updates.push(`edited_at = $${updates.length+1}`); vals.push(now());
         await pool.query(`UPDATE posts SET ${updates.join(', ')} WHERE id = $${vals.length+1}`, [...vals, postId]);
@@ -745,7 +909,14 @@ const server = http.createServer(async (req, res) => {
 
     // ── 헬스체크 ──
     if (path === '/health' || path === '/ping') {
-      return json(res, { status: 'ok', timestamp: new Date().toISOString() });
+      // DB를 실제로 찔러본다. 이게 없어서 DB가 사라진 걸 몇 주간 몰랐다.
+      try {
+        await getDb().query('SELECT 1');
+        return json(res, { status: 'ok', db: 'up', timestamp: new Date().toISOString() });
+      } catch (e) {
+        console.error('[헬스체크 실패] DB 응답 없음:', e.code || e.message);
+        return json(res, { status: 'degraded', db: 'down', error: e.code || 'unknown' }, 503);
+      }
     }
 
     // ── 계정 탈퇴 ──
@@ -770,7 +941,7 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    serveFile(res, join(__dirname, '../public/index.html'));
+    serveFile(res, join(__dirname, '../public/index.html'), req);
   } catch (err) {
     console.error('[서버 오류]', err);
     if (!res.headersSent) { res.writeHead(500, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: '서버 오류가 발생했습니다.' })); }
@@ -792,6 +963,13 @@ function rateLimit(ip, action, maxReq = 10, windowMs = 60000) {
   rateLimitMap.set(key, record);
   return record.count > maxReq;
 }
+// 만료 세션 정리 — 예전에는 sessions 테이블이 무한히 쌓였다
+setInterval(() => {
+  cleanupSessions()
+    .then(n => { if (n) console.log(`[세션 정리] 만료 세션 ${n}건 삭제`); })
+    .catch(e => console.error('[세션 정리 실패]', e.code || e.message));
+}, 6 * 3600 * 1000).unref?.();
+
 // 1시간마다 캐시 정리
 setInterval(() => {
   const now = Date.now();

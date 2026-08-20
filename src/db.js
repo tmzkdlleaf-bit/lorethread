@@ -47,6 +47,22 @@ async function query(sql, params, attempt = 1) {
   }
 }
 
+/** 여러 문장을 한 트랜잭션으로 묶어 실행. 중간 실패 시 전부 롤백된다. */
+export async function withTransaction(fn) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch {}
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 // ? → $1,$2,... 변환 헬퍼
 function q(sql) {
   let i = 0;
@@ -61,7 +77,7 @@ function q(sql) {
 export async function initDb() {
   await query(`
     CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, display_name TEXT NOT NULL, role TEXT DEFAULT 'member', theme TEXT DEFAULT 'light', created_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT);
     CREATE TABLE IF NOT EXISTS worlds (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL, slug TEXT UNIQUE NOT NULL, description TEXT DEFAULT '', banner_color TEXT DEFAULT '#185FA5', banner_height INTEGER DEFAULT 140, banner_image_url TEXT DEFAULT '', icon_emoji TEXT DEFAULT '', icon_image_url TEXT DEFAULT '', announce_text TEXT DEFAULT '', bg_image_url TEXT DEFAULT '', bg_overlay_opacity REAL DEFAULT 0.5, custom_font TEXT DEFAULT '', card_style TEXT DEFAULT 'default', banner_align TEXT DEFAULT 'left', created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS world_members (world_id TEXT NOT NULL, user_id TEXT NOT NULL, joined_at TEXT NOT NULL, PRIMARY KEY (world_id, user_id));
     CREATE TABLE IF NOT EXISTS characters (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, world_id TEXT NOT NULL, name TEXT NOT NULL, handle TEXT NOT NULL, role TEXT DEFAULT '', bio TEXT DEFAULT '', color_bg TEXT DEFAULT '#E6F1FB', color_fg TEXT DEFAULT '#185FA5', avatar_url TEXT DEFAULT '', header_url TEXT DEFAULT '', is_npc INTEGER DEFAULT 0, created_at TEXT NOT NULL);
@@ -97,6 +113,7 @@ export async function initDb() {
     `CREATE INDEX IF NOT EXISTS idx_characters_world ON characters(world_id)`,
     `CREATE INDEX IF NOT EXISTS idx_characters_user ON characters(user_id)`,
     `CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)`,
     `CREATE INDEX IF NOT EXISTS idx_world_members_user ON world_members(user_id)`,
     `CREATE INDEX IF NOT EXISTS idx_dm_messages_room ON dm_messages(room_id, created_at ASC)`,
     `CREATE INDEX IF NOT EXISTS idx_dm_reads_user ON dm_reads(user_id)`,
@@ -138,9 +155,27 @@ export async function updateUser(id, fields) {
 }
 
 // ── Session ──
-export async function getSession(id) { return q('SELECT * FROM sessions WHERE id = ?').get(id); }
-export async function createSession(s) { await q('INSERT INTO sessions (id,user_id,created_at) VALUES (?,?,?)').run(s.id,s.user_id,s.created_at); }
+export const SESSION_TTL_DAYS = 30;
+export async function getSession(id) {
+  const s = await q('SELECT * FROM sessions WHERE id = ?').get(id);
+  if (!s) return null;
+  // 만료된 세션은 즉시 폐기 (쿠키 Max-Age만으로는 서버 기록이 남음)
+  if (s.expires_at && s.expires_at < new Date().toISOString()) {
+    await deleteSession(id);
+    return null;
+  }
+  return s;
+}
+export async function createSession(s) {
+  const exp = s.expires_at || new Date(Date.now() + SESSION_TTL_DAYS * 86400000).toISOString();
+  await q('INSERT INTO sessions (id,user_id,created_at,expires_at) VALUES (?,?,?,?)').run(s.id, s.user_id, s.created_at, exp);
+}
 export async function deleteSession(id) { await q('DELETE FROM sessions WHERE id = ?').run(id); }
+/** 만료 세션 일괄 정리. 서버가 주기적으로 호출한다. */
+export async function cleanupSessions() {
+  const { rowCount } = await query('DELETE FROM sessions WHERE expires_at IS NOT NULL AND expires_at < $1', [new Date().toISOString()]);
+  return rowCount || 0;
+}
 
 // ── World ──
 export async function getWorldBySlug(slug) { return q('SELECT * FROM worlds WHERE slug = ?').get(slug); }
@@ -185,7 +220,7 @@ export async function createChar(c) {
     [c.id,c.user_id,c.world_id,c.name,c.handle,c.role||'',c.bio||'',c.color_bg||'#E6F1FB',c.color_fg||'#185FA5',c.avatar_url||'',c.header_url||'',c.is_npc?1:0,c.created_at]);
 }
 export async function updateChar(id,fields) {
-  const allowed=['name','role','bio','color_bg','color_fg','avatar_url','header_url','is_npc','pinned_post_id'];
+  const allowed=['name','role','bio','color_bg','color_fg','avatar_url','header_url','is_npc'];
   const keys=Object.keys(fields).filter(k=>allowed.includes(k)&&fields[k]!==undefined);
   if(!keys.length) return getCharById(id);
   const set=keys.map((k,i)=>`${k} = $${i+1}`).join(', ');
@@ -311,6 +346,15 @@ export async function addPostMedia(m) {
 export async function getReaction(pid,cid) { return q('SELECT * FROM reactions WHERE post_id=? AND character_id=?').get(pid,cid); }
 export async function addReaction(r) { await query('INSERT INTO reactions (id,post_id,character_id,created_at) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING',[r.id,r.post_id,r.character_id,r.created_at]); }
 export async function removeReaction(pid,cid) { await q('DELETE FROM reactions WHERE post_id=? AND character_id=?').run(pid,cid); }
+/** 여러 포스트 × 여러 캐릭터의 반응 여부를 한 번의 쿼리로 조회. N+1 제거용. */
+export async function getReactedPostIds(postIds, charIds) {
+  if (!postIds?.length || !charIds?.length) return new Set();
+  const { rows } = await query(
+    'SELECT DISTINCT post_id FROM reactions WHERE post_id = ANY($1) AND character_id = ANY($2)',
+    [postIds, charIds]
+  );
+  return new Set(rows.map(r => r.post_id));
+}
 export async function getReactionCount(pid) { return parseInt((await q('SELECT COUNT(*) as cnt FROM reactions WHERE post_id=?').get(pid))?.cnt||0); }
 
 // ── Notification ──
@@ -356,8 +400,20 @@ export async function isRoomMember(rid,uid) { return !!(await q('SELECT 1 FROM d
 export async function createDmMessage(msg) {
   await query('INSERT INTO dm_messages (id,room_id,sender_user_id,character_id,content,created_at) VALUES ($1,$2,$3,$4,$5,$6)',[msg.id,msg.room_id,msg.sender_user_id,msg.character_id||null,msg.content,msg.created_at]);
 }
-export async function getDmMessages(rid,limit=60) {
-  return query(`SELECT m.*,u.display_name,c.name as char_name,c.color_bg as char_color_bg,c.color_fg as char_color_fg,c.avatar_url as char_avatar,c.role as char_role FROM dm_messages m JOIN users u ON u.id=m.sender_user_id LEFT JOIN characters c ON c.id=m.character_id WHERE m.room_id=$1 ORDER BY m.created_at ASC`,[rid]).then(r=>r.rows.slice(-limit));
+export async function getDmMessages(rid, limit = 60) {
+  // 방 전체를 불러와 JS에서 자르지 않고, SQL에서 최근 N건만 가져온다.
+  const { rows } = await query(`
+    SELECT * FROM (
+      SELECT m.*, u.display_name, c.name AS char_name, c.color_bg AS char_color_bg,
+             c.color_fg AS char_color_fg, c.avatar_url AS char_avatar, c.role AS char_role
+      FROM dm_messages m
+      JOIN users u ON u.id = m.sender_user_id
+      LEFT JOIN characters c ON c.id = m.character_id
+      WHERE m.room_id = $1
+      ORDER BY m.created_at DESC
+      LIMIT $2
+    ) t ORDER BY created_at ASC`, [rid, Math.min(Math.max(parseInt(limit) || 60, 1), 200)]);
+  return rows;
 }
 export async function getUnreadDmCount(uid) {
   const { rows } = await query(`
@@ -397,25 +453,69 @@ export async function setWorldAdmin(worldId, userId, isAdmin) {
 
 // ── 계정 탈퇴 ──
 export async function deleteUserAccount(userId) {
-  // 유저의 캐릭터 찾기
-  const { rows: chars } = await query('SELECT id FROM characters WHERE user_id=$1', [userId]);
-  for (const c of chars) {
-    const { rows: posts } = await query('SELECT id FROM posts WHERE character_id=$1', [c.id]);
-    for (const p of posts) {
-      await query('DELETE FROM post_media WHERE post_id=$1', [p.id]);
-      await query('DELETE FROM reactions WHERE post_id=$1', [p.id]);
-      await query('DELETE FROM notifications WHERE post_id=$1', [p.id]);
+  // 전부 한 트랜잭션. 중간에 실패하면 아무것도 지워지지 않는다.
+  return withTransaction(async (c) => {
+    const { rows: chars } = await c.query('SELECT id FROM characters WHERE user_id=$1', [userId]);
+    const charIds = chars.map(x => x.id);
+
+    if (charIds.length) {
+      const { rows: posts } = await c.query('SELECT id FROM posts WHERE character_id = ANY($1)', [charIds]);
+      const postIds = posts.map(p => p.id);
+      if (postIds.length) {
+        await c.query('DELETE FROM post_media WHERE post_id = ANY($1)', [postIds]);
+        await c.query('DELETE FROM reactions  WHERE post_id = ANY($1)', [postIds]);
+        await c.query('DELETE FROM notifications WHERE post_id = ANY($1)', [postIds]);
+        // 답글이 부모를 잃지 않도록 참조만 끊는다
+        await c.query('UPDATE posts SET reply_to_id = NULL WHERE reply_to_id = ANY($1)', [postIds]);
+      }
+      await c.query('DELETE FROM reactions WHERE character_id = ANY($1)', [charIds]);
+      await c.query('DELETE FROM posts WHERE character_id = ANY($1)', [charIds]);
+      await c.query('DELETE FROM char_sections WHERE character_id = ANY($1)', [charIds]);
+      await c.query('DELETE FROM char_links WHERE character_id = ANY($1)', [charIds]);
+      await c.query('DELETE FROM follows WHERE follower_character_id = ANY($1) OR following_character_id = ANY($1)', [charIds]);
+      await c.query('DELETE FROM notifications WHERE actor_character_id = ANY($1)', [charIds]);
     }
-    await query('DELETE FROM posts WHERE character_id=$1', [c.id]);
-    await query('DELETE FROM char_sections WHERE character_id=$1', [c.id]);
-    await query('DELETE FROM char_links WHERE character_id=$1', [c.id]);
-    await query('DELETE FROM follows WHERE follower_character_id=$1 OR following_character_id=$1', [c.id]);
-  }
-  await query('DELETE FROM characters WHERE user_id=$1', [userId]);
-  await query('DELETE FROM world_members WHERE user_id=$1', [userId]);
-  await query('DELETE FROM world_admins WHERE user_id=$1', [userId]);
-  await query('DELETE FROM dm_room_members WHERE user_id=$1', [userId]);
-  await query('DELETE FROM sessions WHERE user_id=$1', [userId]);
-  await query('DELETE FROM notifications WHERE recipient_user_id=$1', [userId]);
-  await query('DELETE FROM users WHERE id=$1', [userId]);
+
+    await c.query('DELETE FROM characters   WHERE user_id=$1', [userId]);
+    await c.query('DELETE FROM world_members WHERE user_id=$1', [userId]);
+    await c.query('DELETE FROM world_admins  WHERE user_id=$1', [userId]);
+    await c.query('DELETE FROM dm_room_members WHERE user_id=$1', [userId]);
+    await c.query('DELETE FROM dm_reads     WHERE user_id=$1', [userId]);
+    await c.query('DELETE FROM dm_messages  WHERE sender_user_id=$1', [userId]);
+    await c.query('DELETE FROM sessions     WHERE user_id=$1', [userId]);
+    await c.query('DELETE FROM notifications WHERE recipient_user_id=$1', [userId]);
+    await c.query('DELETE FROM users        WHERE id=$1', [userId]);
+  });
 }
+
+/** 세계관 삭제. 삭제 순서가 중요하다 — 참조하는 쪽을 먼저 지운다. */
+export async function deleteWorldCascade(worldId) {
+  return withTransaction(async (c) => {
+    const { rows: chars } = await c.query('SELECT id FROM characters WHERE world_id=$1', [worldId]);
+    const charIds = chars.map(x => x.id);
+    const { rows: posts } = await c.query('SELECT id FROM posts WHERE world_id=$1', [worldId]);
+    const postIds = posts.map(p => p.id);
+
+    // 알림을 posts보다 먼저 지운다 (기존 코드는 순서가 뒤바뀌어 고아가 남았다)
+    if (postIds.length) {
+      await c.query('DELETE FROM notifications WHERE post_id = ANY($1)', [postIds]);
+      await c.query('DELETE FROM post_media    WHERE post_id = ANY($1)', [postIds]);
+      await c.query('DELETE FROM reactions     WHERE post_id = ANY($1)', [postIds]);
+    }
+    if (charIds.length) {
+      await c.query('DELETE FROM notifications WHERE actor_character_id = ANY($1)', [charIds]);
+      await c.query('DELETE FROM char_sections WHERE character_id = ANY($1)', [charIds]);
+      await c.query('DELETE FROM char_links    WHERE character_id = ANY($1)', [charIds]);
+      await c.query('DELETE FROM follows WHERE follower_character_id = ANY($1) OR following_character_id = ANY($1)', [charIds]);
+    }
+    await c.query('DELETE FROM posts         WHERE world_id=$1', [worldId]);
+    await c.query('DELETE FROM characters    WHERE world_id=$1', [worldId]);
+    await c.query('DELETE FROM world_members WHERE world_id=$1', [worldId]);
+    await c.query('DELETE FROM world_admins  WHERE world_id=$1', [worldId]);
+    await c.query('DELETE FROM announcements WHERE world_id=$1', [worldId]);
+    await c.query('DELETE FROM events        WHERE world_id=$1', [worldId]);
+    await c.query('DELETE FROM invites       WHERE world_id=$1', [worldId]);
+    await c.query('DELETE FROM worlds        WHERE id=$1', [worldId]);
+  });
+}
+

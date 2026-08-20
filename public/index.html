@@ -2072,7 +2072,7 @@ function renderComposeChar() {
   dd.innerHTML = myChars.map(c => `
     <div class="char-option" onclick="selectComposeChar('${c.id}')">
       <div class="char-option-av" style="background:${c.color_bg};color:${c.color_fg}">${c.avatar_url ? `<img src="${c.avatar_url}" loading="lazy" alt="">` : c.name[0]}</div>
-      <div><div class="char-option-name">${escapeHtml(c.name)}</div><div class="char-option-role">${c.role || ''}</div></div>
+      <div><div class="char-option-name">${escapeHtml(c.name)}</div><div class="char-option-role">${escapeHtml(c.role || '')}</div></div>
     </div>`).join('');
 }
 
@@ -2093,7 +2093,7 @@ function renderSideMyChars() {
   el.innerHTML = myChars.map(c => `
     <div class="side-chr" onclick="openCharProfile('${c.id}')">
       <div class="side-chr-av" style="background:${c.color_bg};color:${c.color_fg}">${c.avatar_url ? `<img src="${c.avatar_url}" loading="lazy" alt="">` : c.name[0]}</div>
-      <div><div class="side-chr-name">${escapeHtml(c.name)}</div><div class="side-chr-role">${c.role || ''}</div></div>
+      <div><div class="side-chr-name">${escapeHtml(c.name)}</div><div class="side-chr-role">${escapeHtml(c.role || '')}</div></div>
       <div class="side-odot"></div>
     </div>`).join('');
 }
@@ -2304,10 +2304,10 @@ function formatContent(text) {
   const escaped = escapeHtml(text);
   // 그 후 안전한 마크업만 허용
   return escaped
-    .replace(/\*(.*?)\*/g, '<em>$1</em>')
+    .replace(/(?<![\w\uAC00-\uD7A3])\*(\S(?:.*?\S)?)\*(?![\w\uAC00-\uD7A3])/g, '<em>$1</em>')
     .replace(/@([a-z0-9_가-힣]+)/gi, (_, handle) =>
       `<span class="mention" onclick="event.stopPropagation();findCharByHandle('${escapeHtml(handle)}')">@${escapeHtml(handle)}</span>`)
-    .replace(/#([^\s#&<>]+)/g, (_, tag) =>
+    .replace(/(?<!&)#([^\s#&<>;]+)/g, (_, tag) =>
       `<span class="hashtag" onclick="event.stopPropagation();openHashtagFeed('${escapeHtml(tag)}')">#${escapeHtml(tag)}</span>`)
     .replace(/\n/g, '<br>');
 }
