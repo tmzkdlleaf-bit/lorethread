@@ -24,7 +24,8 @@ import {
   createRoom, getRoomsByUser, getRoomById, addRoomMember, getRoomMembers,
   isRoomMember, createDmMessage, getDmMessages, getUnreadDmCount, markDmRead, findDmRoom,
   cleanupSessions, deleteWorldCascade, SESSION_TTL_DAYS,
-  getInvites, createInvite, revokeInvite, consumeInvite, setPostSensitive
+  getInvites, createInvite, revokeInvite, consumeInvite, setPostSensitive,
+  searchPosts, searchCharacters, searchPostsFallback, searchCharactersFallback, isTrgmReady
 } from './db.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -550,6 +551,38 @@ const server = http.createServer(async (req, res) => {
         if (!world) return json(res, { error: 'Not found' }, 404);
         await addWorldMember(world.id, user.id);
         return json(res, { ok: true });
+      }
+
+      if (sub === 'search' && m === 'GET') {
+        if (!world) return json(res, { error: 'Not found' }, 404);
+        const qs = new URL(req.url, `http://localhost:${PORT}`).searchParams;
+        const q = safeText(qs.get('q') || '', 100).trim();
+        if (q.length < 1) return json(res, { posts: [], characters: [], query: '' });
+        if (rateLimit(clientIp(req), 'search', 60, 60000)) {
+          return json(res, { error: '검색 요청이 너무 많습니다.' }, 429);
+        }
+        const type = qs.get('type') || 'all';
+        const limit = clampInt(qs.get('limit'), 20, 1, 50);
+        const offset = clampInt(qs.get('offset'), 0, 0, 100000);
+
+        // pg_trgm이 없는 환경에서는 ILIKE 폴백으로 자동 전환
+        const trgm = isTrgmReady();
+        const sp = trgm ? searchPosts : searchPostsFallback;
+        const sc = trgm ? searchCharacters : searchCharactersFallback;
+
+        const [posts, characters] = await Promise.all([
+          type === 'characters' ? [] : sp(world.id, q, limit, offset),
+          type === 'posts' ? [] : sc(world.id, q, Math.min(limit, 10)),
+        ]);
+
+        // 내가 반응한 글 표시 (타임라인과 동일하게 일괄 조회)
+        let enriched = posts;
+        if (user && posts.length) {
+          const myChars = await getCharsByUser(user.id, world.id);
+          const reacted = await getReactedPostIds(posts.map(p => p.id), myChars.map(c => c.id));
+          enriched = posts.map(p => ({ ...p, userReacted: reacted.has(p.id) }));
+        }
+        return json(res, { query: q, posts: enriched, characters, engine: trgm ? 'trgm' : 'like' });
       }
 
       if (sub === 'invite') {

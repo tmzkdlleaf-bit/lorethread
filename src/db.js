@@ -74,6 +74,34 @@ function q(sql) {
   };
 }
 
+/**
+ * 한국어 부분 일치 검색용 인덱스. pg_trgm이 없으면 조용히 건너뛴다.
+ * (권한 없는 호스팅에서도 서버가 뜨는 게 우선. LIKE 폴백으로 동작한다.)
+ */
+let _trgmReady = false;
+export function isTrgmReady() { return _trgmReady; }
+async function setupSearchIndexes() {
+  try {
+    await query('CREATE EXTENSION IF NOT EXISTS pg_trgm');
+  } catch (e) {
+    console.warn('[검색] pg_trgm 사용 불가 — LIKE 폴백으로 동작합니다:', e.code || e.message);
+    return false;
+  }
+  const idx = [
+    `CREATE INDEX IF NOT EXISTS idx_posts_content_trgm ON posts USING GIN (content gin_trgm_ops)`,
+    `CREATE INDEX IF NOT EXISTS idx_chars_name_trgm ON characters USING GIN (name gin_trgm_ops)`,
+    `CREATE INDEX IF NOT EXISTS idx_chars_handle_trgm ON characters USING GIN (handle gin_trgm_ops)`,
+    `CREATE INDEX IF NOT EXISTS idx_chars_bio_trgm ON characters USING GIN (bio gin_trgm_ops)`,
+  ];
+  for (const q1 of idx) {
+    try { await query(q1); }
+    catch (e) { console.warn('[검색] 인덱스 생성 실패:', e.code || e.message); }
+  }
+  _trgmReady = true;
+  console.log('✓ 검색 인덱스 준비 완료');
+  return true;
+}
+
 export async function initDb() {
   await query(`
     CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, display_name TEXT NOT NULL, role TEXT DEFAULT 'member', theme TEXT DEFAULT 'light', created_at TEXT NOT NULL);
@@ -106,6 +134,7 @@ export async function initDb() {
     ALTER TABLE posts ADD COLUMN IF NOT EXISTS moderated_at TEXT;
   `);
   console.log('✓ DB tables ready');
+  await setupSearchIndexes();
   // 인덱스 (없으면 생성, 있으면 무시)
   const indexes = [
     `CREATE INDEX IF NOT EXISTS idx_posts_world_created ON posts(world_id, created_at DESC)`,
@@ -365,6 +394,71 @@ export async function getPostsByWorld(wid,limit=30,offset=0,tag='') {
     params
   );
   return attachMedia(rows);
+}
+
+/**
+ * 세계관 내 통합 검색.
+ * pg_trgm의 % 연산자(유사도)와 ILIKE를 함께 써서 오타·부분일치를 잡는다.
+ * 한국어는 형태소 분석 없이도 trigram으로 부분일치가 잘 걸린다.
+ */
+export async function searchPosts(worldId, q, limit = 20, offset = 0) {
+  const term = String(q || '').trim();
+  if (!term) return [];
+  const like = `%${term.replace(/[%_\\]/g, m => '\\' + m)}%`;   // LIKE 와일드카드 이스케이프
+  const { rows } = await query(
+    POST_SELECT + `
+     WHERE p.world_id = $1
+       AND (p.content ILIKE $2 ESCAPE '\\' OR p.content % $3)
+     GROUP BY p.id, c.name, c.handle, c.color_bg, c.color_fg, c.avatar_url, c.user_id, u.display_name
+     ORDER BY GREATEST(similarity(p.content, $3), 0) DESC, p.created_at DESC
+     LIMIT $4 OFFSET $5`,
+    [worldId, like, term, limit, offset]
+  );
+  return attachMedia(rows);
+}
+
+export async function searchCharacters(worldId, q, limit = 20) {
+  const term = String(q || '').trim();
+  if (!term) return [];
+  const like = `%${term.replace(/[%_\\]/g, m => '\\' + m)}%`;
+  const { rows } = await query(`
+    SELECT ch.*, u.display_name AS player_name
+      FROM characters ch
+      JOIN users u ON u.id = ch.user_id
+     WHERE ch.world_id = $1
+       AND (ch.name ILIKE $2 ESCAPE '\\' OR ch.handle ILIKE $2 ESCAPE '\\'
+            OR ch.bio ILIKE $2 ESCAPE '\\' OR ch.role ILIKE $2 ESCAPE '\\'
+            OR ch.name % $3 OR ch.handle % $3)
+     ORDER BY GREATEST(similarity(ch.name, $3), similarity(ch.handle, $3)) DESC, ch.created_at ASC
+     LIMIT $4`, [worldId, like, term, limit]);
+  return rows;
+}
+
+/** pg_trgm이 없는 환경용 폴백 — ILIKE만 사용. */
+export async function searchPostsFallback(worldId, q, limit = 20, offset = 0) {
+  const term = String(q || '').trim();
+  if (!term) return [];
+  const like = `%${term.replace(/[%_\\]/g, m => '\\' + m)}%`;
+  const { rows } = await query(
+    POST_SELECT + `
+     WHERE p.world_id = $1 AND p.content ILIKE $2 ESCAPE '\\'
+     GROUP BY p.id, c.name, c.handle, c.color_bg, c.color_fg, c.avatar_url, c.user_id, u.display_name
+     ORDER BY p.created_at DESC LIMIT $3 OFFSET $4`,
+    [worldId, like, limit, offset]);
+  return attachMedia(rows);
+}
+export async function searchCharactersFallback(worldId, q, limit = 20) {
+  const term = String(q || '').trim();
+  if (!term) return [];
+  const like = `%${term.replace(/[%_\\]/g, m => '\\' + m)}%`;
+  const { rows } = await query(`
+    SELECT ch.*, u.display_name AS player_name FROM characters ch
+      JOIN users u ON u.id = ch.user_id
+     WHERE ch.world_id = $1
+       AND (ch.name ILIKE $2 ESCAPE '\\' OR ch.handle ILIKE $2 ESCAPE '\\'
+            OR ch.bio ILIKE $2 ESCAPE '\\' OR ch.role ILIKE $2 ESCAPE '\\')
+     ORDER BY ch.created_at ASC LIMIT $3`, [worldId, like, limit]);
+  return rows;
 }
 
 export async function getPostsByFollowing(wid, followingIds, limit=30, offset=0) {

@@ -704,6 +704,7 @@ input, textarea { font-family: var(--sans); color: var(--text); }
 /* ── 검색 ── */
 .search-result-item { display:flex; align-items:center; gap:10px; padding:10px 16px; border-bottom:1px solid var(--border); cursor:pointer; transition:background .1s; }
 .search-result-item:hover { background:var(--bg3); }
+.search-tab.active { background:var(--bg3); color:var(--text1); font-weight:600; }
 .search-group-label { padding:8px 16px 4px; font-size:10px; font-weight:700; color:var(--text3); letter-spacing:.08em; text-transform:uppercase; }
 
 /* ── 모바일 반응형 ── */
@@ -940,6 +941,7 @@ input, textarea { font-family: var(--sans); color: var(--text); }
 
       <!-- 하단 -->
       <div class="sb-bottom">
+        <div class="lnav-item" id="nav-search" onclick="openSearchModal()" style="display:none"><i class="ti ti-search"></i><span>검색</span></div>
         <div class="lnav-item" onclick="toggleTheme()"><i class="ti ti-sun" id="theme-icon"></i><span>테마</span></div>
         <div class="lnav-item" onclick="openPersonalPanel()"><i class="ti ti-settings"></i><span>개인 설정</span></div>
         <div class="lnav-item" id="nav-cust" onclick="openCustPanel()" style="display:none"><i class="ti ti-paint"></i><span>꾸미기</span><span class="owner-tag" style="margin-left:auto;font-size:9px">개설자</span></div>
@@ -1814,6 +1816,9 @@ function initUserPill() {
   if (themeIcon) themeIcon.className = isDark ? 'ti ti-sun' : 'ti ti-moon';
   if (themeLabel) themeLabel.textContent = isDark ? '라이트 모드' : '다크 모드';
   if (lnavTheme) lnavTheme.className = (document.documentElement.getAttribute('data-theme') === 'dark') ? 'ti ti-moon' : 'ti ti-sun';
+  // 검색 버튼 (세계관 안에서만)
+  const searchBtn = document.getElementById('nav-search');
+  if (searchBtn) searchBtn.style.display = currentWorld ? '' : 'none';
   // 꾸미기 버튼 (개설자만)
   const custBtn = document.getElementById('nav-cust');
   if (custBtn && currentWorld) {
@@ -4971,6 +4976,88 @@ function revealPost(e, postId) {
   if (p) p._revealed = true;
 }
 
+// ─── 세계관 내 검색 ───
+let searchType = 'all';
+let searchTimer = null;
+
+function openSearchModal() {
+  if (!currentWorld) { toast('먼저 세계관을 선택해주세요.'); return; }
+  document.getElementById('search-input').value = '';
+  document.getElementById('search-results').innerHTML =
+    '<div style="padding:24px;text-align:center;font-size:12px;color:var(--text3)">검색어를 입력하세요</div>';
+  openModal('search-modal');
+  setTimeout(() => document.getElementById('search-input')?.focus(), 80);
+}
+
+function setSearchType(t) {
+  searchType = t;
+  document.querySelectorAll('.search-tab').forEach(b =>
+    b.classList.toggle('active', b.dataset.type === t));
+  runSearch();
+}
+
+// 입력할 때마다 서버를 때리지 않도록 250ms 디바운스
+function onSearchInput() {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(runSearch, 250);
+}
+
+async function runSearch() {
+  const q = document.getElementById('search-input')?.value?.trim() || '';
+  const box = document.getElementById('search-results');
+  if (!box || !currentWorld) return;
+  if (!q) { box.innerHTML = '<div style="padding:24px;text-align:center;font-size:12px;color:var(--text3)">검색어를 입력하세요</div>'; return; }
+
+  box.innerHTML = '<div style="padding:24px;text-align:center;font-size:12px;color:var(--text3)">검색 중...</div>';
+  const r = await api('GET', `/api/worlds/${encodeURIComponent(currentWorld.slug)}/search?q=${encodeURIComponent(q)}&type=${searchType}`);
+  if (r.error) { box.innerHTML = `<div style="padding:24px;text-align:center;font-size:12px;color:var(--text3)">${escapeHtml(r.error)}</div>`; return; }
+
+  const chars = r.characters || [];
+  const posts = r.posts || [];
+  if (!chars.length && !posts.length) {
+    box.innerHTML = `<div style="padding:24px;text-align:center;font-size:12px;color:var(--text3)">'${escapeHtml(q)}' 검색 결과가 없습니다</div>`;
+    return;
+  }
+
+  let html = '';
+  if (chars.length) {
+    html += '<div class="search-group-label">캐릭터</div>';
+    html += chars.map(c => `
+      <div class="search-result-item" onclick="closeModal('search-modal');openCharProfile('${c.id}')">
+        <div style="width:32px;height:32px;border-radius:50%;flex-shrink:0;background:${escapeHtml(c.color_bg || '#E6F1FB')};
+             background-image:url('${escapeHtml(c.avatar_url || '')}');background-size:cover;background-position:center"></div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;font-weight:600">${escapeHtml(c.name)}
+            <span style="font-size:11px;color:var(--text3);font-weight:400">@${escapeHtml(c.handle)}</span></div>
+          ${c.role ? `<div style="font-size:11px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(c.role)}</div>` : ''}
+        </div>
+      </div>`).join('');
+  }
+  if (posts.length) {
+    html += '<div class="search-group-label">글</div>';
+    html += posts.map(p => `
+      <div class="search-result-item" onclick="closeModal('search-modal');openThreadView('${p.id}')">
+        <div style="width:32px;height:32px;border-radius:50%;flex-shrink:0;background:${escapeHtml(p.color_bg || '#E6F1FB')};
+             background-image:url('${escapeHtml(p.avatar_url || '')}');background-size:cover;background-position:center"></div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:12px;font-weight:600">${escapeHtml(p.char_name || '')}
+            <span style="font-size:10px;color:var(--text3);font-weight:400">${p.created_at ? new Date(p.created_at).toLocaleDateString('ko-KR') : ''}</span></div>
+          <div style="font-size:12px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${highlightTerm(p.content || '', q)}</div>
+        </div>
+      </div>`).join('');
+  }
+  box.innerHTML = html;
+}
+
+/** 검색어를 결과에서 강조. 반드시 이스케이프 후에 <mark>를 넣는다. */
+function highlightTerm(text, term) {
+  const safe = escapeHtml(String(text).slice(0, 160));
+  if (!term) return safe;
+  const t = escapeHtml(term).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  try { return safe.replace(new RegExp(t, 'gi'), m => `<mark style="background:var(--accent-soft,#ffe9a8);color:inherit;padding:0 1px">${m}</mark>`); }
+  catch { return safe; }
+}
+
 async function toggleForceSensitive(e, postId, on = true) {
   e.stopPropagation();
   const r = await api('PATCH', `/api/posts/${postId}`, { force_sensitive: !!on });
@@ -5152,6 +5239,30 @@ initApp();
     </div>
   </div>
 </div>
+<!-- 검색 모달 -->
+<div class="modal-bg" id="search-modal">
+  <div class="modal" style="max-width:560px">
+    <div class="modal-head">
+      <span class="modal-title">세계관 내 검색</span>
+      <button class="modal-close" onclick="closeModal('search-modal')"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="modal-body" style="padding-bottom:0">
+      <div class="chars-search-bar" style="margin-bottom:8px">
+        <i class="ti ti-search" style="color:var(--text3)"></i>
+        <input id="search-input" type="text" placeholder="글 내용, 캐릭터 이름, 핸들..." autocomplete="off"
+               oninput="onSearchInput()" onkeydown="if(event.key==='Enter')runSearch()">
+        <button class="btn btn-ghost" style="font-size:11px;padding:2px 8px" onclick="runSearch()">검색</button>
+      </div>
+      <div style="display:flex;gap:6px;margin-bottom:8px">
+        <button class="btn btn-ghost search-tab active" data-type="all" style="font-size:11px;padding:3px 10px" onclick="setSearchType('all')">전체</button>
+        <button class="btn btn-ghost search-tab" data-type="posts" style="font-size:11px;padding:3px 10px" onclick="setSearchType('posts')">글</button>
+        <button class="btn btn-ghost search-tab" data-type="characters" style="font-size:11px;padding:3px 10px" onclick="setSearchType('characters')">캐릭터</button>
+      </div>
+    </div>
+    <div id="search-results" style="max-height:52vh;overflow-y:auto;border-top:1px solid var(--border)"></div>
+  </div>
+</div>
+
 <!-- 계정 전환 모달 -->
 <div class="modal-bg" id="account-modal">
   <div class="modal" style="max-width:340px">
