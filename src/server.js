@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import http from 'http';
 import { createHash } from 'crypto';
+import { gzipSync, brotliCompressSync, constants as zlibConstants } from 'zlib';
 import { readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs';
 import { join, dirname, extname, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
@@ -243,9 +244,41 @@ async function getSessionUser(req) {
   } catch { return null; }
 }
 
+// 압축은 요청마다 res 밖에서 req를 못 보므로, 핸들러 진입 시 여기에 담아둔다.
+let _acceptEncoding = new WeakMap();
+
+/**
+ * JSON 응답. 1KB를 넘으면 gzip/brotli로 압축한다.
+ * 타임라인 응답이 수십 KB인데 무압축으로 나가고 있었다 — 느린 회선에서 체감이 크다.
+ */
 function json(res, data, status = 200) {
-  res.writeHead(status, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify(data));
+  const body = Buffer.from(JSON.stringify(data), 'utf8');
+  const accept = _acceptEncoding.get(res) || '';
+
+  // 작은 응답은 압축 오버헤드가 더 크다
+  if (body.length < 1024) {
+    res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': body.length });
+    return res.end(body);
+  }
+  try {
+    if (/\bbr\b/.test(accept)) {
+      // 품질 4 — 압축률보다 지연 시간을 우선한다 (기본 11은 너무 느리다)
+      const out = brotliCompressSync(body, {
+        params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4, [zlibConstants.BROTLI_PARAM_SIZE_HINT]: body.length },
+      });
+      res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Encoding': 'br', 'Content-Length': out.length, 'Vary': 'Accept-Encoding' });
+      return res.end(out);
+    }
+    if (/\bgzip\b/.test(accept)) {
+      const out = gzipSync(body, { level: 6 });
+      res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Encoding': 'gzip', 'Content-Length': out.length, 'Vary': 'Accept-Encoding' });
+      return res.end(out);
+    }
+  } catch (e) {
+    console.warn('[압축 실패] 무압축으로 전송:', e.message);
+  }
+  res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': body.length });
+  res.end(body);
 }
 function serveFile(res, fp, req) {
   try {
@@ -256,11 +289,24 @@ function serveFile(res, fp, req) {
     const etag = 'W/"' + content.length.toString(16) + '-' + createHash('sha1').update(content).digest('hex').slice(0, 16) + '"';
     const cache = ext === '.html' ? 'no-cache' : 'public, max-age=86400';
     if (req && req.headers['if-none-match'] === etag) { res.writeHead(304, { 'ETag': etag, 'Cache-Control': cache }); return res.end(); }
-    res.writeHead(200, {
-      'Content-Type': mime[ext] || 'application/octet-stream',
-      'ETag': etag,
-      'Cache-Control': cache,
-    });
+    const acc = (req && req.headers['accept-encoding']) || '';
+    const compressible = ['.html', '.js', '.css', '.json', '.svg', '.txt'].includes(ext);
+    const head = { 'Content-Type': mime[ext] || 'application/octet-stream', 'ETag': etag, 'Cache-Control': cache };
+    if (compressible && content.length > 1024) {
+      try {
+        if (/\bbr\b/.test(acc)) {
+          const out = brotliCompressSync(content, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 5 } });
+          res.writeHead(200, { ...head, 'Content-Encoding': 'br', 'Content-Length': out.length, 'Vary': 'Accept-Encoding' });
+          return res.end(out);
+        }
+        if (/\bgzip\b/.test(acc)) {
+          const out = gzipSync(content, { level: 6 });
+          res.writeHead(200, { ...head, 'Content-Encoding': 'gzip', 'Content-Length': out.length, 'Vary': 'Accept-Encoding' });
+          return res.end(out);
+        }
+      } catch {}
+    }
+    res.writeHead(200, head);
     res.end(content);
   } catch { res.writeHead(404); res.end('Not found'); }
 }
@@ -269,6 +315,7 @@ function makeSlug(name) {
 }
 
 const server = http.createServer(async (req, res) => {
+  _acceptEncoding.set(res, req.headers['accept-encoding'] || '');
   try {
     const rawPath = req.url.split('?')[0];
     const path = decodeURIComponent(rawPath);
