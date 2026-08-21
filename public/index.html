@@ -2285,6 +2285,7 @@ function renderPost(p, isReply = false) {
         <button class="pact bm-btn ${bookmarks.has(p.id)?'bookmarked':''}" id="bm-${p.id}" onclick="toggleBookmark(event,'${p.id}')"><i class="${bookmarks.has(p.id)?'ti ti-bookmark-filled':'ti ti-bookmark'}"></i></button>
       ${p.user_id === appUser?.id ? `<button class="pact" title="수정" data-pid="${p.id}" onclick="event.stopPropagation();openEditPostById(this)"><i class="ti ti-edit" style="font-size:13px"></i></button>` : ''}
       ${p.user_id === appUser?.id && !isReply ? `<button class="pact ${p.is_pinned?'liked':''}" title="${p.is_pinned?'고정 해제':'고정'}" onclick="event.stopPropagation();togglePinPost('${p.id}')"><i class="ti ti-pin" style="font-size:13px"></i></button>` : ''}
+      ${(p.user_id !== appUser?.id) ? `<button class="pact" onclick="event.stopPropagation();muteCharacter('${p.character_id}','${escapeHtml(p.char_name || '')}')" title="이 캐릭터 뮤트"><i class="ti ti-volume-3" style="font-size:13px"></i></button>` : ''}
       ${isWorldAdmin() ? `<button class="pact" onclick="toggleForceSensitive(event,'${p.id}',${p.is_sensitive ? 'false' : 'true'})" title="${p.is_sensitive ? '민감 표시 해제' : '민감 표시(블러)'}"><i class="ti ti-${p.is_sensitive ? 'eye' : 'eye-off'}" style="font-size:13px"></i></button>` : ''}
       ${(p.user_id === appUser?.id || isWorldAdmin()) ? `<button class="pact" onclick="deletePost(event,'${p.id}')" title="삭제"><i class="ti ti-trash" style="font-size:13px"></i></button>` : ''}
       ${(isWorldAdmin() && p.user_id !== appUser?.id) ? `<button class="pact" onclick="toggleForceSensitive(event,'${p.id}')" title="블러 강제 적용"><i class="ti ti-eye-off" style="font-size:13px"></i></button>` : ''}
@@ -3453,6 +3454,12 @@ function applyPersonalSettings() {
 function renderPersonalPanel() {
   const ps = loadPersonalSettings();
   document.getElementById('personal-panel-body').innerHTML = `
+    <div style="margin-bottom:18px" id="ps-mute-section">
+      <div style="font-size:11px;font-weight:600;color:var(--text3);letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px">뮤트한 캐릭터</div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:8px">뮤트한 캐릭터의 글은 타임라인과 검색에서 보이지 않습니다. 상대는 알 수 없습니다.</div>
+      <div id="mute-list" style="font-size:12px"></div>
+    </div>
+
     <div style="margin-bottom:18px">
       <div style="font-size:11px;font-weight:600;color:var(--text3);letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px">글꼴</div>
       <div class="field"><label>UI 폰트</label>
@@ -3539,6 +3546,10 @@ function renderPersonalPanel() {
 function openPersonalPanel() {
   renderPersonalPanel();
   document.getElementById('personal-panel').classList.add('open');
+  // 세계관 안에서만 뮤트 목록이 의미가 있다
+  const sec = document.getElementById('ps-mute-section');
+  if (sec) sec.style.display = currentWorld ? '' : 'none';
+  if (currentWorld) loadMuteList();
 }
 
 function closePersonalPanel() {
@@ -4974,6 +4985,37 @@ function revealPost(e, postId) {
   // feedPosts 배열에도 반영
   const p = feedPosts.find(p => p.id === postId);
   if (p) p._revealed = true;
+}
+
+// ─── 뮤트 ───
+async function muteCharacter(charId, charName) {
+  if (!currentWorld) return;
+  if (!confirm(`${charName} 캐릭터를 뮤트하시겠습니까?\n이 캐릭터의 글이 타임라인과 검색에서 보이지 않습니다.`)) return;
+  const r = await api('POST', `/api/worlds/${encodeURIComponent(currentWorld.slug)}/mutes`, { character_id: charId });
+  if (r.ok) { toast(`${charName} 캐릭터를 뮤트했습니다`); loadFeed(true); }
+  else toast(r.error || '오류가 발생했습니다.');
+}
+
+async function unmuteCharacter(charId) {
+  if (!currentWorld) return;
+  const r = await api('DELETE', `/api/worlds/${encodeURIComponent(currentWorld.slug)}/mutes`, { character_id: charId });
+  if (r.ok) { toast('뮤트를 해제했습니다'); loadMuteList(); loadFeed(true); }
+  else toast(r.error || '오류가 발생했습니다.');
+}
+
+async function loadMuteList() {
+  const box = document.getElementById('mute-list');
+  if (!box || !currentWorld) return;
+  const r = await api('GET', `/api/worlds/${encodeURIComponent(currentWorld.slug)}/mutes`);
+  const list = r.mutes || [];
+  if (!list.length) { box.innerHTML = '<div style="font-size:11px;color:var(--text3)">뮤트한 캐릭터가 없습니다.</div>'; return; }
+  box.innerHTML = list.map(mu => `
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">
+      <div style="width:24px;height:24px;border-radius:50%;flex-shrink:0;background:${escapeHtml(mu.color_bg || '#E6F1FB')};
+           background-image:url('${escapeHtml(mu.avatar_url || '')}');background-size:cover;background-position:center"></div>
+      <span style="flex:1;font-size:12px">${escapeHtml(mu.name)} <span style="color:var(--text3);font-size:11px">@${escapeHtml(mu.handle)}</span></span>
+      <button class="btn btn-ghost" style="font-size:10px;padding:2px 8px" onclick="unmuteCharacter('${mu.muted_character_id}')">해제</button>
+    </div>`).join('');
 }
 
 // ─── 세계관 내 검색 ───

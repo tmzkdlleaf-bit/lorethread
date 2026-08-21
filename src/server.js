@@ -25,7 +25,8 @@ import {
   isRoomMember, createDmMessage, getDmMessages, getUnreadDmCount, markDmRead, findDmRoom,
   cleanupSessions, deleteWorldCascade, SESSION_TTL_DAYS,
   getInvites, createInvite, revokeInvite, consumeInvite, setPostSensitive,
-  searchPosts, searchCharacters, searchPostsFallback, searchCharactersFallback, isTrgmReady
+  searchPosts, searchCharacters, searchPostsFallback, searchCharactersFallback, isTrgmReady,
+  getMutedIds, getMuteList, addMute, removeMute
 } from './db.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -53,6 +54,14 @@ const SESSION_MAX_AGE = SESSION_TTL_DAYS * 86400;
 
 /** 신뢰할 수 있는 클라이언트 IP. x-forwarded-for는 위조 가능하므로
  *  Railway 등 프록시 1홉 뒤라는 전제에서 '마지막' 값을 쓴다. */
+/** 뮤트한 캐릭터의 글을 걸러낸다. 서버에서 거르므로 클라이언트 우회가 불가능하다. */
+async function filterMuted(posts, myCharIds) {
+  if (!posts?.length || !myCharIds?.length) return posts;
+  const muted = await getMutedIds(myCharIds);
+  if (!muted.size) return posts;
+  return posts.filter(p => !muted.has(p.character_id));
+}
+
 /** 세계관 모더레이터인지. owner + world_admins + 전역 admin. */
 async function isModerator(user, worldId) {
   if (!user) return false;
@@ -553,6 +562,35 @@ const server = http.createServer(async (req, res) => {
         return json(res, { ok: true });
       }
 
+      if (sub === 'mutes') {
+        if (!user) return json(res, { error: 'Unauthorized' }, 401);
+        if (!world) return json(res, { error: 'Not found' }, 404);
+        const myChars = await getCharsByUser(user.id, world.id);
+        const myIds = myChars.map(c => c.id);
+        if (!myIds.length) return json(res, { error: '이 세계관에 캐릭터가 없습니다.' }, 400);
+
+        if (m === 'GET') return json(res, { mutes: await getMuteList(myIds) });
+
+        if (m === 'POST') {
+          const b = await readBody(req);
+          if (!b.character_id) return json(res, { error: '대상을 지정해주세요.' }, 400);
+          const target = await getCharById(b.character_id);
+          if (!target || target.world_id !== world.id) return json(res, { error: '대상을 찾을 수 없습니다.' }, 404);
+          // 내 모든 캐릭터 기준으로 뮤트 (캐릭터를 바꿔도 계속 안 보이게)
+          let done = false;
+          for (const mid of myIds) if (await addMute(mid, target.id, world.id)) done = true;
+          if (!done) return json(res, { error: '자기 자신은 뮤트할 수 없습니다.' }, 400);
+          return json(res, { ok: true });
+        }
+
+        if (m === 'DELETE') {
+          const b = await readBody(req);
+          if (!b.character_id) return json(res, { error: '대상을 지정해주세요.' }, 400);
+          for (const mid of myIds) await removeMute(mid, b.character_id);
+          return json(res, { ok: true });
+        }
+      }
+
       if (sub === 'search' && m === 'GET') {
         if (!world) return json(res, { error: 'Not found' }, 404);
         const qs = new URL(req.url, `http://localhost:${PORT}`).searchParams;
@@ -577,12 +615,17 @@ const server = http.createServer(async (req, res) => {
 
         // 내가 반응한 글 표시 (타임라인과 동일하게 일괄 조회)
         let enriched = posts;
-        if (user && posts.length) {
+        let visibleChars = characters;
+        if (user && (posts.length || characters.length)) {
           const myChars = await getCharsByUser(user.id, world.id);
-          const reacted = await getReactedPostIds(posts.map(p => p.id), myChars.map(c => c.id));
-          enriched = posts.map(p => ({ ...p, userReacted: reacted.has(p.id) }));
+          const myIds = myChars.map(c => c.id);
+          const muted = await getMutedIds(myIds);
+          const kept = posts.filter(p => !muted.has(p.character_id));
+          visibleChars = characters.filter(c => !muted.has(c.id));
+          const reacted = await getReactedPostIds(kept.map(p => p.id), myIds);
+          enriched = kept.map(p => ({ ...p, userReacted: reacted.has(p.id) }));
         }
-        return json(res, { query: q, posts: enriched, characters, engine: trgm ? 'trgm' : 'like' });
+        return json(res, { query: q, posts: enriched, characters: visibleChars, engine: trgm ? 'trgm' : 'like' });
       }
 
       if (sub === 'invite') {
@@ -687,8 +730,9 @@ const server = http.createServer(async (req, res) => {
         const posts = await getPostsByFollowing(world.id, followingIds, 30, offset);
         // 예전: 포스트 30개 × 내 캐릭터 N개 = 최대 수십 번의 개별 쿼리.
         // 지금: 한 번의 쿼리로 반응한 post_id 집합을 받아온다.
-        const reacted = await getReactedPostIds(posts.map(p => p.id), myCharIds);
-        return json(res, { posts: posts.map(p => ({ ...p, userReacted: reacted.has(p.id) })) });
+        const visible = await filterMuted(posts, myCharIds);
+        const reacted = await getReactedPostIds(visible.map(p => p.id), myCharIds);
+        return json(res, { posts: visible.map(p => ({ ...p, userReacted: reacted.has(p.id) })) });
       }
 
       if (sub === 'characters') {
@@ -722,6 +766,7 @@ const server = http.createServer(async (req, res) => {
           const myChars = user ? await getCharsByUser(user.id, world.id) : [];
           const myCharIds = myChars.map(c => c.id);
           let posts = await getPostsByWorld(world.id, 30, offset, tag);
+          posts = await filterMuted(posts, myCharIds);
           const reacted = await getReactedPostIds(posts.map(p => p.id), myCharIds);
           posts = posts.map(p => ({ ...p, userReacted: reacted.has(p.id) }));
           return json(res, { posts });

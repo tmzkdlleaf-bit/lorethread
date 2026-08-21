@@ -124,6 +124,13 @@ export async function initDb() {
     CREATE TABLE IF NOT EXISTS dm_messages (id TEXT PRIMARY KEY, room_id TEXT NOT NULL, sender_user_id TEXT NOT NULL, character_id TEXT, content TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS dm_reads (user_id TEXT NOT NULL, room_id TEXT NOT NULL, last_read_at TEXT NOT NULL, PRIMARY KEY (user_id, room_id));
     CREATE TABLE IF NOT EXISTS world_admins (world_id TEXT NOT NULL, user_id TEXT NOT NULL, granted_at TEXT NOT NULL, PRIMARY KEY (world_id, user_id));
+    CREATE TABLE IF NOT EXISTS mutes (
+      muter_character_id TEXT NOT NULL,
+      muted_character_id TEXT NOT NULL,
+      world_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (muter_character_id, muted_character_id)
+    );
     ALTER TABLE invites ADD COLUMN IF NOT EXISTS expires_at TEXT;
     ALTER TABLE invites ADD COLUMN IF NOT EXISTS max_uses INTEGER;
     ALTER TABLE invites ADD COLUMN IF NOT EXISTS used_count INTEGER DEFAULT 0;
@@ -153,6 +160,8 @@ export async function initDb() {
     `CREATE INDEX IF NOT EXISTS idx_dm_messages_room ON dm_messages(room_id, created_at ASC)`,
     `CREATE INDEX IF NOT EXISTS idx_dm_reads_user ON dm_reads(user_id)`,
     `CREATE INDEX IF NOT EXISTS idx_events_world ON events(world_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_mutes_muter ON mutes(muter_character_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_mutes_world ON mutes(world_id)`,
     `CREATE INDEX IF NOT EXISTS idx_follows_follower ON follows(follower_character_id)`,
     `CREATE INDEX IF NOT EXISTS idx_follows_following ON follows(following_character_id)`,
   ];
@@ -210,6 +219,38 @@ export async function deleteSession(id) { await q('DELETE FROM sessions WHERE id
 export async function cleanupSessions() {
   const { rowCount } = await query('DELETE FROM sessions WHERE expires_at IS NOT NULL AND expires_at < $1', [new Date().toISOString()]);
   return rowCount || 0;
+}
+
+// ── 뮤트 ──
+/** 내 캐릭터들이 뮤트한 캐릭터 ID 집합. */
+export async function getMutedIds(muterCharIds) {
+  if (!muterCharIds?.length) return new Set();
+  const { rows } = await query(
+    'SELECT DISTINCT muted_character_id FROM mutes WHERE muter_character_id = ANY($1)', [muterCharIds]);
+  return new Set(rows.map(r => r.muted_character_id));
+}
+/** 뮤트 목록 (관리 화면용). 대상 캐릭터 정보를 함께 준다. */
+export async function getMuteList(muterCharIds) {
+  if (!muterCharIds?.length) return [];
+  const { rows } = await query(`
+    SELECT m.*, c.name, c.handle, c.avatar_url, c.color_bg, c.color_fg
+      FROM mutes m JOIN characters c ON c.id = m.muted_character_id
+     WHERE m.muter_character_id = ANY($1)
+     ORDER BY m.created_at DESC`, [muterCharIds]);
+  return rows;
+}
+export async function addMute(muterId, mutedId, worldId) {
+  if (muterId === mutedId) return false;   // 자기 자신은 뮤트 불가
+  await query(
+    `INSERT INTO mutes (muter_character_id, muted_character_id, world_id, created_at)
+     VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
+    [muterId, mutedId, worldId, new Date().toISOString()]);
+  return true;
+}
+export async function removeMute(muterId, mutedId) {
+  const { rowCount } = await query(
+    'DELETE FROM mutes WHERE muter_character_id=$1 AND muted_character_id=$2', [muterId, mutedId]);
+  return rowCount > 0;
 }
 
 // ── 초대 코드 ──
